@@ -43,9 +43,9 @@ export async function createSignup(input: {
   const id = randomUUID();
   const { rows } = await getPool().query<SignupRow>(
     `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id)
-     values ($1, $2, $3, $4, $5, $6, $1)
+     values ($1, $2, $3, $4, $5, $6, $7)
      returning *`,
-    [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount]
+    [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount, id]
   );
   return rows[0];
 }
