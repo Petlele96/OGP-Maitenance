@@ -52,9 +52,22 @@ export function phpUrlEncode(value: string): string {
     .replace(/[!'()~*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
 }
 
+/** For the outgoing checkout form: PayFast's SDK drops empty fields (PHP !empty() check). */
 function paramStringFromEntries(entries: [string, string][]): string {
   return entries
     .filter(([key, value]) => key !== "signature" && value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}=${phpUrlEncode(String(value))}`)
+    .join("&");
+}
+
+/**
+ * For incoming ITN payloads: PayFast includes empty optional fields (e.g. custom_str2=)
+ * in the signature it computed, so only the signature field itself is excluded here -
+ * dropping empty values (like the outgoing builder does) breaks the signature match.
+ */
+function paramStringFromItnEntries(entries: [string, string][]): string {
+  return entries
+    .filter(([key, value]) => key !== "signature" && value !== undefined && value !== null)
     .map(([key, value]) => `${key}=${phpUrlEncode(String(value))}`)
     .join("&");
 }
@@ -200,7 +213,7 @@ export async function verifyItn(
   const data: Record<string, string> = {};
   for (const [key, value] of entries) data[key] = value;
 
-  const paramString = paramStringFromEntries(entries);
+  const paramString = paramStringFromItnEntries(entries);
 
   const submittedSignature = data.signature ?? "";
   const computedSignature = md5(`${paramString}&passphrase=${phpUrlEncode(config.passphrase)}`);
