@@ -1,11 +1,21 @@
-import { neon } from "@neondatabase/serverless";
+import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import type { PlanId } from "./plans";
 
-function sql() {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("Missing DATABASE_URL");
-  return neon(url);
+let pool: Pool | null = null;
+
+function getPool(): Pool {
+  if (pool) return pool;
+  const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+  if (!url) throw new Error("Missing DATABASE_URL (or POSTGRES_URL)");
+  // Uses the pooled connection string (PgBouncer transaction mode) - fine here since we
+  // only ever issue single unnamed parameterized statements, no server-side prepares.
+  // sslmode rewritten to no-verify / rejectUnauthorized: false - Supabase's pooler
+  // presents a cert chain that isn't fully verifiable; the connection is still
+  // TLS-encrypted, just without full chain verification.
+  const connectionString = url.replace(/([?&])sslmode=[^&]*/, "$1sslmode=no-verify");
+  pool = new Pool({ connectionString, max: 1, ssl: { rejectUnauthorized: false } });
+  return pool;
 }
 
 export interface SignupRow {
@@ -30,44 +40,44 @@ export async function createSignup(input: {
   plan: PlanId;
   amount: number;
 }): Promise<SignupRow> {
-  const db = sql();
   const id = randomUUID();
-  const rows = (await db`
-    insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id)
-    values (${id}, ${input.fullName}, ${input.houseNumber}, ${input.whatsappNumber}, ${input.plan}, ${input.amount}, ${id})
-    returning *
-  `) as SignupRow[];
+  const { rows } = await getPool().query<SignupRow>(
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id)
+     values ($1, $2, $3, $4, $5, $6, $1)
+     returning *`,
+    [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount]
+  );
   return rows[0];
 }
 
 export async function getSignup(id: string): Promise<SignupRow | null> {
-  const db = sql();
-  const rows = (await db`select * from signups where id = ${id} limit 1`) as SignupRow[];
+  const { rows } = await getPool().query<SignupRow>("select * from signups where id = $1 limit 1", [id]);
   return rows[0] ?? null;
 }
 
 export async function getSignupByMPaymentId(mPaymentId: string): Promise<SignupRow | null> {
-  const db = sql();
-  const rows = (await db`select * from signups where payfast_m_payment_id = ${mPaymentId} limit 1`) as SignupRow[];
+  const { rows } = await getPool().query<SignupRow>(
+    "select * from signups where payfast_m_payment_id = $1 limit 1",
+    [mPaymentId]
+  );
   return rows[0] ?? null;
 }
 
 export async function activateSignup(id: string, subscriptionToken: string | null): Promise<void> {
-  const db = sql();
-  await db`
-    update signups
-    set payment_status = 'active',
-        start_date = coalesce(start_date, current_date),
-        payfast_subscription_token = coalesce(${subscriptionToken}, payfast_subscription_token),
-        updated_at = now()
-    where id = ${id}
-  `;
+  await getPool().query(
+    `update signups
+     set payment_status = 'active',
+         start_date = coalesce(start_date, current_date),
+         payfast_subscription_token = coalesce($2, payfast_subscription_token),
+         updated_at = now()
+     where id = $1`,
+    [id, subscriptionToken]
+  );
 }
 
 export async function markSignupFailed(id: string): Promise<void> {
-  const db = sql();
-  await db`
-    update signups set payment_status = 'failed', updated_at = now()
-    where id = ${id} and payment_status = 'pending'
-  `;
+  await getPool().query(
+    "update signups set payment_status = 'failed', updated_at = now() where id = $1 and payment_status = 'pending'",
+    [id]
+  );
 }
