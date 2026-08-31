@@ -22,10 +22,13 @@ export interface PayFastConfig {
 }
 
 export function getPayFastConfig(): PayFastConfig {
-  const merchantId = process.env.PAYFAST_MERCHANT_ID;
-  const merchantKey = process.env.PAYFAST_MERCHANT_KEY;
-  const passphrase = process.env.PAYFAST_PASSPHRASE;
-  const testMode = (process.env.PAYFAST_MODE ?? "sandbox") !== "live";
+  // .trim() defensively strips stray whitespace/newlines that sneak in when env vars are
+  // copy-pasted into a dashboard - a bare newline in merchant_id would silently corrupt
+  // every signature.
+  const merchantId = process.env.PAYFAST_MERCHANT_ID?.trim();
+  const merchantKey = process.env.PAYFAST_MERCHANT_KEY?.trim();
+  const passphrase = process.env.PAYFAST_PASSPHRASE?.trim();
+  const testMode = (process.env.PAYFAST_MODE?.trim() ?? "sandbox") !== "live";
 
   if (!merchantId || !merchantKey || !passphrase) {
     throw new Error(
