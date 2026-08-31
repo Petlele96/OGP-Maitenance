@@ -81,6 +81,7 @@ const CHECKOUT_FIELD_ORDER = [
   "subscription_type",
   "recurring_amount",
   "frequency",
+  "cycles",
 ] as const;
 
 export interface CheckoutInput {
@@ -127,6 +128,7 @@ export function buildCheckoutFields(input: CheckoutInput): CheckoutResult {
     subscription_type: "1",
     recurring_amount: input.plan.amount.toFixed(2),
     frequency: String(input.plan.frequency),
+    cycles: "0",
   };
 
   const entries = CHECKOUT_FIELD_ORDER.map((key) => [key, values[key]] as [string, string]);
