@@ -23,7 +23,8 @@ interface LaunchOfferCustomer {
 
 interface DashboardData {
   activeCustomers: { total: number; monthly: number; annual: number };
-  revenueThisMonth: number;
+  onceOffJobsThisMonth: number;
+  revenueThisMonth: { subscriber: number; onceOff: number; total: number };
   failedOrOverdue: FailedOrOverdue[];
   cancellationsThisMonth: number;
   completion: { done: number; scheduled: number };
@@ -130,16 +131,26 @@ export default function OwnerPage() {
 
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
-          <p className="text-xs font-medium text-brand-500">Active customers</p>
+          <p className="text-xs font-medium text-brand-500">Active subscribers</p>
           <p className="mt-1 text-2xl font-bold text-brand-900">{data.activeCustomers.total}</p>
           <p className="mt-0.5 text-xs text-brand-600">
             {data.activeCustomers.monthly} monthly · {data.activeCustomers.annual} annual
           </p>
         </div>
-        <div className="rounded-2xl bg-brand-600 p-4 shadow-sm">
-          <p className="text-xs font-medium text-brand-100">Money in this month</p>
-          <p className="mt-1 text-2xl font-bold text-white">{formatRand(data.revenueThisMonth)}</p>
+        <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+          <p className="text-xs font-medium text-brand-500">Once-off jobs</p>
+          <p className="mt-1 text-2xl font-bold text-brand-900">{data.onceOffJobsThisMonth}</p>
+          <p className="mt-0.5 text-xs text-brand-600">this month</p>
         </div>
+      </div>
+
+      <div className="rounded-2xl bg-brand-600 p-4 shadow-sm">
+        <p className="text-xs font-medium text-brand-100">Money in this month</p>
+        <p className="mt-1 text-2xl font-bold text-white">{formatRand(data.revenueThisMonth.total)}</p>
+        <p className="mt-0.5 text-xs text-brand-100">
+          {formatRand(data.revenueThisMonth.subscriber)} subscribers · {formatRand(data.revenueThisMonth.onceOff)}{" "}
+          once-off
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3">

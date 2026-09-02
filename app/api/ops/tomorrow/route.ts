@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/ops-auth";
-import { candidateSlotForDate, toDateKey } from "@/lib/schedule";
-import { getActiveSignupsForSlots } from "@/lib/db";
+import { toDateKey } from "@/lib/schedule";
+import { getActiveVisitsForDates } from "@/lib/db";
 import { groupByBlock } from "@/lib/sort";
 
 export const runtime = "nodejs";
@@ -12,19 +12,20 @@ export async function GET(req: NextRequest) {
 
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const slot = candidateSlotForDate(tomorrow);
+  const dateKey = toDateKey(tomorrow);
 
-  const signups = slot ? await getActiveSignupsForSlots([slot]) : [];
+  const signups = await getActiveVisitsForDates([dateKey]);
   const customers = signups.map((s) => ({
     id: s.id,
     fullName: s.full_name,
     houseNumber: s.house_number,
     whatsappNumber: s.whatsapp_number,
     block: s.block,
+    plan: s.plan,
   }));
 
   return NextResponse.json({
-    date: toDateKey(tomorrow),
+    date: dateKey,
     total: customers.length,
     groups: groupByBlock(customers),
   });

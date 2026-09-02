@@ -16,7 +16,7 @@ export const signupSchema = z.object({
     .string()
     .trim()
     .regex(SA_MOBILE_REGEX, "Enter a valid South African cell number"),
-  plan: z.enum(["monthly", "annual"]),
+  plan: z.enum(["monthly", "annual", "once-off"]),
   agreedToTerms: z.literal(true, {
     errorMap: () => ({ message: "You must agree to the Terms and Conditions" }),
   }),

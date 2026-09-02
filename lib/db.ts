@@ -1,7 +1,7 @@
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
-import type { PlanId } from "./plans";
-import { SLOT_COUNT, toDateKey, visitDaysForSlot } from "./schedule";
+import { type PlanId, isSubscriberPlan } from "./plans";
+import { SLOT_COUNT, toDateKey, visitDaysForSlot, candidateSlotForDate } from "./schedule";
 import { LAUNCH_OFFER_SPOTS } from "./site";
 
 let pool: Pool | null = null;
@@ -31,12 +31,13 @@ export interface SignupRow {
   payment_status: "pending" | "active" | "failed" | "cancelled";
   payfast_subscription_token: string | null;
   payfast_m_payment_id: string;
-  service_slot: number;
+  service_slot: number | null;
   cancelled_at: string | null;
   last_payment_failed_at: string | null;
   terms_accepted_at: string;
   launch_offer_eligible: boolean;
   block: number | null;
+  scheduled_visit_date: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -64,7 +65,9 @@ export async function createSignup(input: {
   block: number | null;
 }): Promise<SignupRow> {
   const id = randomUUID();
-  const slot = await pickLeastLoadedSlot();
+  // Once-off bookings don't recur, so there's no bi-monthly slot to assign - they get a
+  // scheduled_visit_date instead, set once payment completes (see bookOnceOffVisit).
+  const slot = isSubscriberPlan(input.plan) ? await pickLeastLoadedSlot() : null;
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls createSignup after the zod schema has confirmed agreedToTerms === true.
   const { rows } = await getPool().query<SignupRow>(
@@ -131,6 +134,22 @@ export async function cancelSignup(id: string): Promise<void> {
   );
 }
 
+/**
+ * Books a once-off visit for tomorrow, once payment completes. No capacity model - it
+ * just joins tomorrow's list alongside whoever else is already on it, same as the
+ * existing recurring scheduler does for any given day. Only sets it the first time
+ * (won't move an already-booked date on a retried ITN).
+ */
+export async function bookOnceOffVisit(id: string): Promise<void> {
+  await getPool().query(
+    `update signups
+     set scheduled_visit_date = coalesce(scheduled_visit_date, current_date + interval '1 day'),
+         updated_at = now()
+     where id = $1`,
+    [id]
+  );
+}
+
 /** Idempotent via pf_payment_id's unique constraint - safe if PayFast retries an ITN. */
 export async function recordPayment(signupId: string, amount: number, pfPaymentId: string | null): Promise<void> {
   await getPool().query(
@@ -147,13 +166,28 @@ export interface ServiceVisitRow {
   completed_at: string;
 }
 
-/** Unordered - callers sort/group with lib/sort.ts (a plain SQL text order misorders numeric house numbers). */
-export async function getActiveSignupsForSlots(slots: number[]): Promise<SignupRow[]> {
-  if (slots.length === 0) return [];
+/**
+ * Active signups due on any of the given dates - subscribers via their recurring
+ * service_slot (candidateSlotForDate), once-off bookings via their single
+ * scheduled_visit_date. A subscriber row always has scheduled_visit_date null and a
+ * once-off row always has service_slot null, so the two conditions never double-match
+ * the same row. Unordered - callers sort/group with lib/sort.ts (a plain SQL text order
+ * misorders numeric house numbers).
+ */
+export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRow[]> {
+  if (dates.length === 0) return [];
+  const slots = Array.from(
+    new Set(
+      dates
+        .map((d) => candidateSlotForDate(new Date(`${d}T00:00:00`)))
+        .filter((s): s is number => s !== null)
+    )
+  );
   const { rows } = await getPool().query<SignupRow>(
     `select * from signups
-     where payment_status = 'active' and service_slot = any($1)`,
-    [slots]
+     where payment_status = 'active'
+       and (service_slot = any($1::int[]) or scheduled_visit_date = any($2::date[]))`,
+    [slots, dates]
   );
   return rows;
 }
@@ -182,23 +216,41 @@ export async function markVisitDone(signupId: string, date: string): Promise<Ser
   return rows[0];
 }
 
+/** Active subscribers only - once-off bookings don't have an ongoing subscription state. */
 export async function getActiveCustomerCounts(): Promise<{ monthly: number; annual: number }> {
-  const { rows } = await getPool().query<{ plan: PlanId; count: string }>(
-    "select plan, count(*) from signups where payment_status = 'active' group by plan"
+  const { rows } = await getPool().query<{ plan: "monthly" | "annual"; count: string }>(
+    "select plan, count(*) from signups where payment_status = 'active' and plan in ('monthly', 'annual') group by plan"
   );
   const counts = { monthly: 0, annual: 0 };
   for (const row of rows) counts[row.plan] = Number(row.count);
   return counts;
 }
 
-export async function getRevenueThisMonth(): Promise<number> {
-  const { rows } = await getPool().query<{ total: string }>(
-    `select coalesce(sum(amount), 0) as total
-     from payments
-     where received_at >= date_trunc('month', current_date)
-       and received_at < date_trunc('month', current_date) + interval '1 month'`
+export async function getOnceOffJobsThisMonth(): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(distinct s.id) as count
+     from signups s
+     join payments p on p.signup_id = s.id
+     where s.plan = 'once-off'
+       and p.received_at >= date_trunc('month', current_date)
+       and p.received_at < date_trunc('month', current_date) + interval '1 month'`
   );
-  return Number(rows[0].total);
+  return Number(rows[0].count);
+}
+
+export async function getRevenueThisMonth(): Promise<{ subscriber: number; onceOff: number; total: number }> {
+  const { rows } = await getPool().query<{ subscriber: string; once_off: string }>(
+    `select
+       coalesce(sum(p.amount) filter (where s.plan in ('monthly', 'annual')), 0) as subscriber,
+       coalesce(sum(p.amount) filter (where s.plan = 'once-off'), 0) as once_off
+     from payments p
+     join signups s on s.id = p.signup_id
+     where p.received_at >= date_trunc('month', current_date)
+       and p.received_at < date_trunc('month', current_date) + interval '1 month'`
+  );
+  const subscriber = Number(rows[0].subscriber);
+  const onceOff = Number(rows[0].once_off);
+  return { subscriber, onceOff, total: subscriber + onceOff };
 }
 
 export async function getCancellationsThisMonth(): Promise<number> {
@@ -270,6 +322,7 @@ export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCust
      from signups s
      left join payments p on p.signup_id = s.id
      where s.payment_status = 'active' and s.last_payment_failed_at is null
+       and s.plan in ('monthly', 'annual')
      group by s.id`
   );
 
@@ -300,8 +353,10 @@ export async function getCompletionRateThisMonth(): Promise<{ done: number; sche
   const todayDay = today.getDate();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
+  // service_slot is null for once-off bookings - they've got no recurring schedule to
+  // measure a completion rate against, so this stays scoped to subscribers.
   const { rows: slotRows } = await getPool().query<{ service_slot: number }>(
-    "select service_slot from signups where payment_status = 'active'"
+    "select service_slot from signups where payment_status = 'active' and service_slot is not null"
   );
 
   let scheduled = 0;

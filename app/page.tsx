@@ -4,7 +4,15 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { PLANS, type PlanId } from "@/lib/plans";
-import { WHATSAPP_DISPLAY, WHATSAPP_LINK, COMPANY_NAME, COMPANY_REG, COMPANY_CSD, LAUNCH_OFFER_SPOTS } from "@/lib/site";
+import {
+  WHATSAPP_DISPLAY,
+  WHATSAPP_LINK,
+  ASK_QUESTION_LINK,
+  COMPANY_NAME,
+  COMPANY_REG,
+  COMPANY_CSD,
+  LAUNCH_OFFER_SPOTS,
+} from "@/lib/site";
 
 const INCLUDED = ["Cutting", "Weeding", "Edging", "Garden cuttings removed and bagged", "General tidy"];
 const STEPS = ["You sign up.", "You get your service day.", "We WhatsApp you the day before.", "We come and do the work."];
@@ -18,6 +26,8 @@ const WORKER_POINTS = [
 
 const CTA_BUTTON_CLASS =
   "block h-14 w-full rounded-lg bg-cta text-center text-base font-medium leading-[56px] text-white transition hover:brightness-95 active:brightness-90";
+const SECONDARY_BUTTON_CLASS =
+  "block h-14 w-full rounded-lg border-2 border-navy text-center text-base font-medium leading-[52px] text-navy transition hover:bg-navy hover:text-white";
 
 export default function SignupPage() {
   const [fullName, setFullName] = useState("");
@@ -200,15 +210,16 @@ export default function SignupPage() {
             <span className="text-lg font-semibold text-navy">R280</span>
             <span className="ml-2 text-sm text-navy/50">once-off visit</span>
           </div>
-          <a href={WHATSAPP_LINK} className="text-xs font-medium uppercase tracking-wide text-skyblue underline underline-offset-2">
-            WhatsApp to book
-          </a>
+          <span className="text-xs font-medium uppercase tracking-wide text-navy/40">Select below</span>
         </div>
       </section>
 
-      <div className="border-t border-navy/10 py-10">
+      <div className="flex flex-col gap-3 border-t border-navy/10 py-10">
         <a href="#signup-form" className={CTA_BUTTON_CLASS}>
           Sign up now
+        </a>
+        <a href={ASK_QUESTION_LINK} className={SECONDARY_BUTTON_CLASS}>
+          Ask a question
         </a>
       </div>
 
@@ -376,7 +387,9 @@ export default function SignupPage() {
               {submitting ? "Redirecting to secure payment..." : "Continue to secure payment"}
             </button>
             <p className="mt-4 text-xs leading-relaxed text-navy/50">
-              You&apos;ll be redirected to PayFast to set up secure recurring billing. Cancel anytime.
+              {PLANS[plan].recurring
+                ? "You'll be redirected to PayFast to set up secure recurring billing. Cancel anytime."
+                : "You'll be redirected to PayFast to pay securely for your visit."}
             </p>
           </div>
         </form>
@@ -394,6 +407,9 @@ export default function SignupPage() {
           </a>
         </p>
         <p className="mt-1 text-sm text-navy/60">{COMPANY_NAME}, Platinum Village, Rustenburg</p>
+        <a href={ASK_QUESTION_LINK} className={`${SECONDARY_BUTTON_CLASS} mt-6`}>
+          Ask a question
+        </a>
       </footer>
     </main>
   );

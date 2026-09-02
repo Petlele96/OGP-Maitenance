@@ -50,3 +50,11 @@ create table if not exists payments (
 
 create index if not exists payments_signup_id_idx on payments (signup_id);
 create index if not exists payments_received_at_idx on payments (received_at);
+
+-- 'once-off' joins 'monthly'/'annual' as a third plan value. ADD CONSTRAINT isn't
+-- idempotently re-runnable by this naive semicolon-splitting migration script, so -
+-- matching service_slot/block above - the enum is validated in Zod instead of a DB check.
+alter table signups drop constraint if exists signups_plan_check;
+
+-- Once-off bookings only: the single date they're booked for. Null for subscribers.
+alter table signups add column if not exists scheduled_visit_date date;

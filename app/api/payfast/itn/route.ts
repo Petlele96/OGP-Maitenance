@@ -8,8 +8,9 @@ import {
   cancelSignup,
   recordPayment,
   markLaunchOfferEligibility,
+  bookOnceOffVisit,
 } from "@/lib/db";
-import { PLANS, isPlanId } from "@/lib/plans";
+import { PLANS, isPlanId, isSubscriberPlan } from "@/lib/plans";
 
 export const runtime = "nodejs";
 
@@ -54,10 +55,14 @@ export async function POST(req: NextRequest) {
     if (Number.isFinite(amount)) {
       await recordPayment(signup.id, amount, result.data.pf_payment_id ?? null);
     }
-    // Only on the first payment, not every recurring renewal - tags the launch offer
-    // customers (manual refund, no automated discount billing) without extra writes.
-    if (isFirstActivation) {
+    if (isFirstActivation && isSubscriberPlan(signup.plan)) {
+      // Only on the first payment, not every recurring renewal - tags the launch offer
+      // customers (manual refund, no automated discount billing) without extra writes.
+      // "Second month free" has no meaning for a once-off, so it never consumes a spot.
       await markLaunchOfferEligibility(signup.id);
+    }
+    if (isFirstActivation && !isSubscriberPlan(signup.plan)) {
+      await bookOnceOffVisit(signup.id);
     }
   } else if (paymentStatus === "FAILED") {
     // A single recurring charge failing does NOT cancel the subscription - it stays

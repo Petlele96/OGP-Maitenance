@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { buildReminderLink } from "@/lib/site";
+import type { PlanId } from "@/lib/plans";
 
 type ViewMode = "today" | "tomorrow" | "week";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
@@ -17,6 +18,7 @@ interface TodayCustomer {
   houseNumber: string;
   whatsappNumber: string;
   block: number | null;
+  plan: PlanId;
   done: boolean;
   completedAt: string | null;
 }
@@ -34,6 +36,7 @@ interface TomorrowCustomer {
   houseNumber: string;
   whatsappNumber: string;
   block: number | null;
+  plan: PlanId;
 }
 
 interface TomorrowData {
@@ -44,7 +47,7 @@ interface TomorrowData {
 
 interface WeekDay {
   date: string;
-  customers: { id: string; fullName: string; houseNumber: string; done: boolean }[];
+  customers: { id: string; fullName: string; houseNumber: string; plan: PlanId; done: boolean }[];
 }
 
 function formatTime(iso: string): string {
@@ -58,6 +61,12 @@ function formatDayHeading(dateKey: string): string {
 
 function blockHeading(block: number | null): string {
   return block === null ? "No block set" : `Block ${block}`;
+}
+
+function planLabel(plan: PlanId): string {
+  if (plan === "monthly") return "Monthly";
+  if (plan === "annual") return "Annual";
+  return "Once-off";
 }
 
 export default function OpsPage() {
@@ -260,7 +269,9 @@ export default function OpsPage() {
                       >
                         <div className="min-w-0">
                           <p className="font-semibold text-brand-900">{c.fullName}</p>
-                          <p className="text-sm text-brand-700">House {c.houseNumber}</p>
+                          <p className="text-sm text-brand-700">
+                            House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
+                          </p>
                           <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
                             {c.whatsappNumber}
                           </a>
@@ -312,7 +323,9 @@ export default function OpsPage() {
                       >
                         <div className="min-w-0">
                           <p className="font-semibold text-brand-900">{c.fullName}</p>
-                          <p className="text-sm text-brand-700">House {c.houseNumber}</p>
+                          <p className="text-sm text-brand-700">
+                            House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
+                          </p>
                         </div>
                         <a
                           href={buildReminderLink(c.fullName, c.whatsappNumber)}
@@ -347,7 +360,10 @@ export default function OpsPage() {
                     {day.customers.map((c) => (
                       <li key={c.id} className="flex items-center justify-between text-sm">
                         <span className="text-brand-800">
-                          {c.fullName} <span className="text-brand-500">· House {c.houseNumber}</span>
+                          {c.fullName}{" "}
+                          <span className="text-brand-500">
+                            · House {c.houseNumber} · {planLabel(c.plan)}
+                          </span>
                         </span>
                         {c.done && <span className="text-xs font-semibold text-brand-500">✓</span>}
                       </li>

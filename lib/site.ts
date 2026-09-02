@@ -20,3 +20,8 @@ export function buildReminderLink(fullName: string, whatsappNumber: string): str
   const message = buildReminderMessage(fullName);
   return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
 }
+
+/** "Ask a question" button on the signup page - opens WhatsApp to the business number. */
+export const ASK_QUESTION_LINK = `${WHATSAPP_LINK}?text=${encodeURIComponent(
+  "Hi OGP Services, I have a question about yard maintenance."
+)}`;

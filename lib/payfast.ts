@@ -119,12 +119,17 @@ function splitName(fullName: string): { first: string; last: string } {
   return { first: trimmed.slice(0, idx), last: trimmed.slice(idx + 1) };
 }
 
-/** Builds the signed hidden-form fields for a PayFast recurring-subscription checkout. */
+/**
+ * Builds the signed hidden-form fields for a PayFast checkout - a recurring subscription
+ * when `input.plan.recurring` is true, or a plain one-time payment when it's false (the
+ * subscription_type/recurring_amount/frequency/cycles fields are simply omitted; PayFast
+ * needs no separate "one-time" flag, just the absence of subscription_type).
+ */
 export function buildCheckoutFields(input: CheckoutInput): CheckoutResult {
   const config = getPayFastConfig();
   const { first, last } = splitName(input.fullName);
 
-  const values: Record<(typeof CHECKOUT_FIELD_ORDER)[number], string> = {
+  const values: Partial<Record<(typeof CHECKOUT_FIELD_ORDER)[number], string>> = {
     merchant_id: config.merchantId,
     merchant_key: config.merchantKey,
     return_url: input.returnUrl,
@@ -138,10 +143,14 @@ export function buildCheckoutFields(input: CheckoutInput): CheckoutResult {
     item_name: input.plan.itemName,
     item_description: input.plan.itemDescription,
     custom_str1: input.signupId,
-    subscription_type: "1",
-    recurring_amount: input.plan.amount.toFixed(2),
-    frequency: String(input.plan.frequency),
-    cycles: "0",
+    ...(input.plan.recurring
+      ? {
+          subscription_type: "1",
+          recurring_amount: input.plan.amount.toFixed(2),
+          frequency: String(input.plan.frequency),
+          cycles: "0",
+        }
+      : {}),
   };
 
   const entries = CHECKOUT_FIELD_ORDER.map((key) => [key, values[key]] as [string, string]);
