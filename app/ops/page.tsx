@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { buildReminderLink } from "@/lib/site";
+import { buildReminderLink, buildFollowUpLink } from "@/lib/site";
 import type { PlanId } from "@/lib/plans";
 
 type ViewMode = "today" | "tomorrow" | "week";
@@ -263,31 +263,43 @@ export default function OpsPage() {
                     {group.customers.map((c) => (
                       <li
                         key={c.id}
-                        className={`flex items-center justify-between rounded-2xl p-4 shadow-sm ring-1 ${
+                        className={`rounded-2xl p-4 shadow-sm ring-1 ${
                           c.done ? "bg-brand-50 ring-brand-100" : "bg-white ring-brand-100"
                         }`}
                       >
-                        <div className="min-w-0">
-                          <p className="font-semibold text-brand-900">{c.fullName}</p>
-                          <p className="text-sm text-brand-700">
-                            House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
-                          </p>
-                          <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
-                            {c.whatsappNumber}
-                          </a>
+                        <div className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-brand-900">{c.fullName}</p>
+                            <p className="text-sm text-brand-700">
+                              House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
+                            </p>
+                            <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
+                              {c.whatsappNumber}
+                            </a>
+                          </div>
+                          {c.done ? (
+                            <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-sm font-semibold text-brand-700">
+                              ✓ {c.completedAt ? formatTime(c.completedAt) : "Done"}
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleDone(c.id)}
+                              disabled={completingId === c.id}
+                              className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                            >
+                              Done
+                            </button>
+                          )}
                         </div>
-                        {c.done ? (
-                          <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-sm font-semibold text-brand-700">
-                            ✓ {c.completedAt ? formatTime(c.completedAt) : "Done"}
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handleDone(c.id)}
-                            disabled={completingId === c.id}
-                            className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                        {c.done && c.plan === "once-off" && (
+                          <a
+                            href={buildFollowUpLink(c.fullName, c.whatsappNumber)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-3 block rounded-lg border-2 border-brand-500 px-4 py-3 text-center text-sm font-semibold text-brand-700"
                           >
-                            Done
-                          </button>
+                            Follow up: offer monthly plan
+                          </a>
                         )}
                       </li>
                     ))}

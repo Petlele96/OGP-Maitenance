@@ -25,3 +25,14 @@ export function buildReminderLink(fullName: string, whatsappNumber: string): str
 export const ASK_QUESTION_LINK = `${WHATSAPP_LINK}?text=${encodeURIComponent(
   "Hi OGP Services, I have a question about yard maintenance."
 )}`;
+
+/** Sent from the ops Today list, once a once-off job is marked done - pitches the monthly plan. */
+export function buildFollowUpMessage(fullName: string): string {
+  const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;
+  return `Hi ${firstName}, OGP Services here. We've finished your yard today — hope you're happy with it. If you'd like it kept this way, our monthly plan is R200 and we come twice a month. Just reply and I'll set you up.`;
+}
+
+export function buildFollowUpLink(fullName: string, whatsappNumber: string): string {
+  const message = buildFollowUpMessage(fullName);
+  return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
+}

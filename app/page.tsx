@@ -95,15 +95,19 @@ export default function SignupPage() {
   return (
     <main className="mx-auto max-w-lg bg-white px-6 text-navy">
       {/* 1. Logo + headline */}
-      <header className="pb-16 pt-14">
-        <Image src="/logo.png" alt="OGP Services" width={320} height={320} priority className="h-9 w-auto" />
-        <h1 className="mt-10 text-[46px] font-extrabold leading-[1.05] tracking-tight text-navy sm:text-[52px]">
+      <header className="pb-24 pt-14">
+        <Image src="/logo.png" alt="OGP Services" width={320} height={320} priority className="h-28 w-auto" />
+        <h1 className="mt-10 text-[56px] font-black leading-[1.02] tracking-tight text-navy sm:text-[64px]">
           Your yard, kept tidy, all year round.
         </h1>
+        {/* Full-width slot reserved for a before/after photo. */}
+        <div className="mt-10 flex aspect-[4/3] w-full items-center justify-center border border-navy/15 bg-navy/5">
+          <span className="text-sm font-medium text-navy/40">Before / after photo</span>
+        </div>
       </header>
 
       {/* 2. Intro */}
-      <section className="border-t border-navy/10 py-16">
+      <section className="border-t border-navy/10 py-24">
         <p className="text-[17px] leading-relaxed text-navy">
           Most people here work shifts. You don&apos;t have time for your yard. We do it for you, on a set day,
           every month.
@@ -111,8 +115,8 @@ export default function SignupPage() {
       </section>
 
       {/* 3. Run from Platinum Village */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Run from Platinum Village</h2>
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Run from Platinum Village</h2>
         <p className="mt-6 text-[17px] leading-relaxed text-navy">
           This service is run by a resident of Platinum Village.
           <br />
@@ -121,8 +125,8 @@ export default function SignupPage() {
       </section>
 
       {/* 4. What's included */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">What&apos;s included</h2>
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">What&apos;s included</h2>
         <ul className="mt-6 space-y-3">
           {INCLUDED.map((item) => (
             <li key={item} className="text-[17px] leading-relaxed text-navy">
@@ -136,8 +140,8 @@ export default function SignupPage() {
       </section>
 
       {/* 5. How often */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">How often</h2>
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">How often</h2>
         <p className="mt-6 text-[17px] leading-relaxed text-navy">
           Twice a month, September to April.
           <br />
@@ -147,8 +151,8 @@ export default function SignupPage() {
       </section>
 
       {/* 6. How it works */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">How it works</h2>
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">How it works</h2>
         <ol className="mt-6 flex flex-col gap-4">
           {STEPS.map((step, i) => (
             <li key={step} className="flex gap-4">
@@ -160,8 +164,8 @@ export default function SignupPage() {
       </section>
 
       {/* 7. Our workers */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Our workers</h2>
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Our workers</h2>
         <ul className="mt-6 space-y-3">
           {WORKER_POINTS.map((point) => (
             <li key={point} className="text-[17px] leading-relaxed text-navy">
@@ -171,14 +175,14 @@ export default function SignupPage() {
         </ul>
       </section>
 
-      <div className="border-t border-navy/10 py-10">
+      <div className="border-t border-navy/10 py-24">
         <a href="#signup-form" className={CTA_BUTTON_CLASS}>
           Sign up now
         </a>
       </div>
 
       {/* 8. Credibility - quiet, understated */}
-      <section className="border-t border-navy/10 py-16">
+      <section className="border-t border-navy/10 py-24">
         <div className="border border-navy/15 px-5 py-4">
           <p className="text-xs font-medium text-navy">
             {COMPANY_NAME} &middot; Reg. {COMPANY_REG} &middot; CSD {COMPANY_CSD}
@@ -190,11 +194,11 @@ export default function SignupPage() {
       </section>
 
       {/* 9. Price - the hero */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Price</h2>
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Price</h2>
         <div className="mt-6 flex items-baseline gap-2">
-          <span className="text-6xl font-extrabold tracking-tight text-navy">R200</span>
-          <span className="text-base font-medium text-navy/50">per month</span>
+          <span className="text-7xl font-black tracking-tight text-navy">R200</span>
+          <span className="text-base font-medium text-navy/40">per month</span>
         </div>
 
         <div className="mt-8 flex items-center justify-between border border-navy/15 px-5 py-4">
@@ -214,7 +218,7 @@ export default function SignupPage() {
         </div>
       </section>
 
-      <div className="flex flex-col gap-3 border-t border-navy/10 py-10">
+      <div className="flex flex-col gap-3 border-t border-navy/10 py-24">
         <a href="#signup-form" className={CTA_BUTTON_CLASS}>
           Sign up now
         </a>
@@ -224,8 +228,8 @@ export default function SignupPage() {
       </div>
 
       {/* 10. Launch offer */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Launch offer</h2>
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Launch offer</h2>
         <p className="mt-6 text-[17px] leading-relaxed text-navy">
           The first {LAUNCH_OFFER_SPOTS} customers get their second month free.
         </p>
@@ -239,10 +243,10 @@ export default function SignupPage() {
       </section>
 
       {/* 11. Signup form */}
-      <section id="signup-form" className="border-t border-navy/10 py-16">
+      <section id="signup-form" className="border-t border-navy/10 py-24">
         <form onSubmit={handleSubmit} className="flex flex-col gap-10" noValidate>
           <fieldset>
-            <legend className="mb-5 text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">
+            <legend className="mb-5 text-sm font-bold uppercase tracking-[0.12em] text-skyblue">
               Choose your plan
             </legend>
             <div className="flex flex-col gap-3">
@@ -276,7 +280,7 @@ export default function SignupPage() {
           </fieldset>
 
           <fieldset className="flex flex-col gap-5">
-            <legend className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">
+            <legend className="mb-1 text-sm font-bold uppercase tracking-[0.12em] text-skyblue">
               Your details
             </legend>
 
@@ -399,7 +403,7 @@ export default function SignupPage() {
       </section>
 
       {/* 12. Footer */}
-      <footer className="border-t border-navy/10 py-10">
+      <footer className="border-t border-navy/10 py-24">
         <p className="text-sm text-navy/60">
           WhatsApp{" "}
           <a href={WHATSAPP_LINK} className="text-navy underline underline-offset-2">
