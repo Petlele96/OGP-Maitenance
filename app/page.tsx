@@ -2,17 +2,18 @@
 
 import { useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { PLANS, type PlanId } from "@/lib/plans";
+import { WHATSAPP_DISPLAY, WHATSAPP_LINK, COMPANY_NAME, COMPANY_REG } from "@/lib/site";
 
 const SERVICES = ["Cutting", "Weeding", "Edging", "Refuse removal", "General tidy"];
-const WHATSAPP_DISPLAY = "079 533 5440";
-const WHATSAPP_LINK = "https://wa.me/27795335440";
 
 export default function SignupPage() {
   const [fullName, setFullName] = useState("");
   const [houseNumber, setHouseNumber] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
   const [plan, setPlan] = useState<PlanId>("monthly");
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -26,7 +27,7 @@ export default function SignupPage() {
       const res = await fetch("/api/signup", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ fullName, houseNumber, whatsappNumber, plan }),
+        body: JSON.stringify({ fullName, houseNumber, whatsappNumber, plan, agreedToTerms }),
       });
       const data = await res.json();
 
@@ -108,7 +109,9 @@ export default function SignupPage() {
       {/* 5. Credibility - quiet, understated */}
       <section className="border-t border-navy/10 py-16">
         <div className="border border-navy/15 px-5 py-4">
-          <p className="text-xs font-medium text-navy">OGP Services (Pty) Ltd &middot; Reg. 2019/343931/07</p>
+          <p className="text-xs font-medium text-navy">
+            {COMPANY_NAME} &middot; Reg. {COMPANY_REG}
+          </p>
           <p className="mt-2 text-xs leading-relaxed text-navy/60">
             Grounds and maintenance work delivered for Sibanye-Stillwater, Royal Bafokeng
             Administration and Rustenburg Local Municipality.
@@ -209,6 +212,28 @@ export default function SignupPage() {
             </div>
           </fieldset>
 
+          <label className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              required
+              checked={agreedToTerms}
+              onChange={(e) => setAgreedToTerms(e.target.checked)}
+              className="mt-0.5 h-4 w-4 flex-shrink-0 accent-skyblue"
+            />
+            <span className="text-sm leading-relaxed text-navy/70">
+              I have read and agree to the{" "}
+              <Link
+                href="/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-navy underline underline-offset-2"
+              >
+                Terms and Conditions
+              </Link>
+              .
+            </span>
+          </label>
+
           {error && (
             <p className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
               {error}
@@ -218,7 +243,7 @@ export default function SignupPage() {
           <div>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !agreedToTerms}
               className="h-14 w-full rounded-lg bg-cta text-base font-medium text-white transition hover:brightness-95 active:brightness-90 disabled:opacity-60"
             >
               {submitting ? "Redirecting to secure payment..." : "Continue to secure payment"}

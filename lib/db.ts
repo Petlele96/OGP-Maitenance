@@ -33,6 +33,7 @@ export interface SignupRow {
   service_slot: number;
   cancelled_at: string | null;
   last_payment_failed_at: string | null;
+  terms_accepted_at: string;
   created_at: string;
   updated_at: string;
 }
@@ -60,9 +61,11 @@ export async function createSignup(input: {
 }): Promise<SignupRow> {
   const id = randomUUID();
   const slot = await pickLeastLoadedSlot();
+  // terms_accepted_at is set unconditionally here, not passed in - the API route only
+  // ever calls createSignup after the zod schema has confirmed agreedToTerms === true.
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot)
-     values ($1, $2, $3, $4, $5, $6, $7, $8)
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now())
      returning *`,
     [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount, id, slot]
   );

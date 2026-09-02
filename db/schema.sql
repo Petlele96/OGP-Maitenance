@@ -34,6 +34,7 @@ create index if not exists service_visits_date_idx on service_visits (service_da
 
 alter table signups add column if not exists cancelled_at timestamptz;
 alter table signups add column if not exists last_payment_failed_at timestamptz;
+alter table signups add column if not exists terms_accepted_at timestamptz;
 
 create table if not exists payments (
   id uuid primary key default gen_random_uuid(),
