@@ -32,6 +32,7 @@ export interface SignupRow {
   payfast_m_payment_id: string;
   service_slot: number;
   cancelled_at: string | null;
+  last_payment_failed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -87,6 +88,7 @@ export async function activateSignup(id: string, subscriptionToken: string | nul
      set payment_status = 'active',
          start_date = coalesce(start_date, current_date),
          payfast_subscription_token = coalesce($2, payfast_subscription_token),
+         last_payment_failed_at = null,
          updated_at = now()
      where id = $1`,
     [id, subscriptionToken]
@@ -100,7 +102,19 @@ export async function markSignupFailed(id: string): Promise<void> {
   );
 }
 
-/** Only affects rows still 'active' - a no-op if already cancelled/failed. */
+/**
+ * A recurring charge failed on an otherwise-active subscription. Deliberately does NOT
+ * change payment_status - they stay 'active' (still on the /ops schedule, still get
+ * serviced) but show up on the owner dashboard's chase list via last_payment_failed_at.
+ */
+export async function markPaymentFailed(id: string): Promise<void> {
+  await getPool().query(
+    "update signups set last_payment_failed_at = now(), updated_at = now() where id = $1 and payment_status = 'active'",
+    [id]
+  );
+}
+
+/** True cancellation (not a failed charge) - takes them off the schedule. Only affects still-'active' rows. */
 export async function cancelSignup(id: string): Promise<void> {
   await getPool().query(
     `update signups
@@ -200,10 +214,13 @@ export interface FailedOrOverdueCustomer {
 }
 
 /**
- * Two groups: signups whose *first* payment never went through (still 'pending' ->
- * 'failed'), and active signups whose last payment is older than one billing period
- * (no grace period) - "last payment" falls back to start_date/created_at if a signup
- * predates the payments table.
+ * Three sources, merged: signups whose *first* payment never went through (still
+ * 'pending' -> 'failed'); active signups with a *recurring* charge that failed
+ * (last_payment_failed_at set by the ITN handler - still 'active', still on the
+ * schedule, just needs chasing); and active signups with no recent failure but whose
+ * last successful payment is older than one billing period (no grace period). The
+ * second and third groups are mutually exclusive by construction (WHERE clauses below)
+ * so nobody is double-listed.
  */
 export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCustomer[]> {
   const pool = getPool();
@@ -215,15 +232,21 @@ export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCust
     full_name: string;
     house_number: string;
     whatsapp_number: string;
-    created_at: string;
-  }>("select id, full_name, house_number, whatsapp_number, created_at from signups where payment_status = 'failed'");
+    reference_date: string;
+  }>(
+    `select id, full_name, house_number, whatsapp_number, created_at as reference_date
+     from signups where payment_status = 'failed'
+     union all
+     select id, full_name, house_number, whatsapp_number, last_payment_failed_at as reference_date
+     from signups where payment_status = 'active' and last_payment_failed_at is not null`
+  );
 
   const failed: FailedOrOverdueCustomer[] = failedRows.map((r) => ({
     id: r.id,
     fullName: r.full_name,
     houseNumber: r.house_number,
     whatsappNumber: r.whatsapp_number,
-    daysLate: Math.max(0, Math.floor((now - new Date(r.created_at).getTime()) / msPerDay)),
+    daysLate: Math.max(0, Math.floor((now - new Date(r.reference_date).getTime()) / msPerDay)),
     status: "failed",
   }));
 
@@ -239,7 +262,7 @@ export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCust
             coalesce(max(p.received_at), s.start_date::timestamptz, s.created_at) as last_payment_at
      from signups s
      left join payments p on p.signup_id = s.id
-     where s.payment_status = 'active'
+     where s.payment_status = 'active' and s.last_payment_failed_at is null
      group by s.id`
   );
 

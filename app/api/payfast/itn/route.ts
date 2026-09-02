@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyItn } from "@/lib/payfast";
-import { getSignupByMPaymentId, activateSignup, markSignupFailed, cancelSignup, recordPayment } from "@/lib/db";
+import {
+  getSignupByMPaymentId,
+  activateSignup,
+  markSignupFailed,
+  markPaymentFailed,
+  cancelSignup,
+  recordPayment,
+} from "@/lib/db";
 import { PLANS, isPlanId } from "@/lib/plans";
 
 export const runtime = "nodejs";
@@ -45,11 +52,21 @@ export async function POST(req: NextRequest) {
     if (Number.isFinite(amount)) {
       await recordPayment(signup.id, amount, result.data.pf_payment_id ?? null);
     }
+  } else if (paymentStatus === "FAILED") {
+    // A single recurring charge failing does NOT cancel the subscription - it stays
+    // 'active' (still on the /ops schedule) but shows up on the owner dashboard's
+    // chase list until a COMPLETE payment clears it.
+    if (signup.payment_status === "active") {
+      await markPaymentFailed(signup.id);
+    } else {
+      await markSignupFailed(signup.id);
+    }
   } else if (signup.payment_status === "active") {
-    // Any non-COMPLETE ITN against an already-active subscription means it stopped
-    // renewing (explicit cancellation or a failed recurring charge) - PayFast's docs
-    // don't specify the exact payment_status string for cancellation, so this is a
-    // deliberately broad catch-all rather than matching a specific value.
+    // Anything else (explicit CANCELLED, or an unrecognised status) against an
+    // already-active subscription is treated as a real cancellation - it comes off
+    // the schedule. PayFast's docs don't specify the exact payment_status string for
+    // an explicit cancellation, so this is a deliberate catch-all for "not COMPLETE,
+    // not a known FAILED charge" rather than matching one specific value.
     await cancelSignup(signup.id);
   } else {
     await markSignupFailed(signup.id);
