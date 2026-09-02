@@ -1,12 +1,23 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { PLANS, type PlanId } from "@/lib/plans";
-import { WHATSAPP_DISPLAY, WHATSAPP_LINK, COMPANY_NAME, COMPANY_REG } from "@/lib/site";
+import { WHATSAPP_DISPLAY, WHATSAPP_LINK, COMPANY_NAME, COMPANY_REG, COMPANY_CSD, LAUNCH_OFFER_SPOTS } from "@/lib/site";
 
-const SERVICES = ["Cutting", "Weeding", "Edging", "Refuse removal", "General tidy"];
+const INCLUDED = ["Cutting", "Weeding", "Edging", "Garden cuttings removed and bagged", "General tidy"];
+const STEPS = ["You sign up.", "You get your service day.", "We WhatsApp you the day before.", "We come and do the work."];
+const WORKER_POINTS = [
+  "Our workers are known to us.",
+  "They carry ID.",
+  "They wear OGP Services clothing.",
+  "They stay in the yard.",
+  "They never enter the house.",
+];
+
+const CTA_BUTTON_CLASS =
+  "block h-14 w-full rounded-lg bg-cta text-center text-base font-medium leading-[56px] text-white transition hover:brightness-95 active:brightness-90";
 
 export default function SignupPage() {
   const [fullName, setFullName] = useState("");
@@ -16,7 +27,15 @@ export default function SignupPage() {
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [spotsLeft, setSpotsLeft] = useState<number | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    fetch("/api/launch-offer", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => setSpotsLeft(data.spotsLeft))
+      .catch(() => setSpotsLeft(null));
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -60,17 +79,102 @@ export default function SignupPage() {
       {/* 1. Logo + headline */}
       <header className="pb-16 pt-14">
         <Image src="/logo.png" alt="OGP Services" width={320} height={320} priority className="h-9 w-auto" />
-        <p className="mt-10 text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">
-          Platinum Village, Rustenburg
-        </p>
-        <h1 className="mt-3 text-[46px] font-extrabold leading-[1.05] tracking-tight text-navy sm:text-[52px]">
-          Yards kept tidy, all year round.
+        <h1 className="mt-10 text-[46px] font-extrabold leading-[1.05] tracking-tight text-navy sm:text-[52px]">
+          Your yard, kept tidy, all year round.
         </h1>
       </header>
 
-      {/* 2. Price - the hero */}
+      {/* 2. Intro */}
       <section className="border-t border-navy/10 py-16">
-        <div className="flex items-baseline gap-2">
+        <p className="text-[17px] leading-relaxed text-navy">
+          Most people here work shifts. You don&apos;t have time for your yard. We do it for you, on a set day,
+          every month.
+        </p>
+      </section>
+
+      {/* 3. Run from Platinum Village */}
+      <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Run from Platinum Village</h2>
+        <p className="mt-6 text-[17px] leading-relaxed text-navy">
+          This service is run by a resident of Platinum Village.
+          <br />
+          Not an outside company.
+        </p>
+      </section>
+
+      {/* 4. What's included */}
+      <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">What&apos;s included</h2>
+        <ul className="mt-6 space-y-3">
+          {INCLUDED.map((item) => (
+            <li key={item} className="text-[17px] leading-relaxed text-navy">
+              {item}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-6 text-sm leading-relaxed text-navy/60">
+          Not included: household refuse. That stays with the municipality on Thursdays.
+        </p>
+      </section>
+
+      {/* 5. How often */}
+      <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">How often</h2>
+        <p className="mt-6 text-[17px] leading-relaxed text-navy">
+          Twice a month, September to April.
+          <br />
+          Once a month, May to August.
+        </p>
+        <p className="mt-4 text-sm leading-relaxed text-navy/60">Grass grows slowly in winter. That&apos;s why.</p>
+      </section>
+
+      {/* 6. How it works */}
+      <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">How it works</h2>
+        <ol className="mt-6 flex flex-col gap-4">
+          {STEPS.map((step, i) => (
+            <li key={step} className="flex gap-4">
+              <span className="text-[17px] font-semibold text-skyblue">{i + 1}</span>
+              <span className="text-[17px] leading-relaxed text-navy">{step}</span>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* 7. Our workers */}
+      <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Our workers</h2>
+        <ul className="mt-6 space-y-3">
+          {WORKER_POINTS.map((point) => (
+            <li key={point} className="text-[17px] leading-relaxed text-navy">
+              {point}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <div className="border-t border-navy/10 py-10">
+        <a href="#signup-form" className={CTA_BUTTON_CLASS}>
+          Sign up now
+        </a>
+      </div>
+
+      {/* 8. Credibility - quiet, understated */}
+      <section className="border-t border-navy/10 py-16">
+        <div className="border border-navy/15 px-5 py-4">
+          <p className="text-xs font-medium text-navy">
+            {COMPANY_NAME} &middot; Reg. {COMPANY_REG} &middot; CSD {COMPANY_CSD}
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-navy/60">
+            We do grounds and maintenance work for Sibanye-Stillwater K6 Shaft and Royal Bafokeng Administration.
+          </p>
+        </div>
+      </section>
+
+      {/* 9. Price - the hero */}
+      <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Price</h2>
+        <div className="mt-6 flex items-baseline gap-2">
           <span className="text-6xl font-extrabold tracking-tight text-navy">R200</span>
           <span className="text-base font-medium text-navy/50">per month</span>
         </div>
@@ -82,45 +186,41 @@ export default function SignupPage() {
           </div>
           <span className="text-xs font-medium uppercase tracking-wide text-skyblue">2 months free</span>
         </div>
-      </section>
 
-      {/* 3. What's included */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">What&apos;s included</h2>
-        <ul className="mt-6 space-y-3">
-          {SERVICES.map((service) => (
-            <li key={service} className="text-[17px] leading-relaxed text-navy">
-              {service}
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      {/* 4. Schedule */}
-      <section className="border-t border-navy/10 py-16">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Schedule</h2>
-        <p className="mt-6 text-[17px] leading-relaxed text-navy">
-          Twice a month, September to April.
-          <br />
-          Once a month, May to August.
-        </p>
-      </section>
-
-      {/* 5. Credibility - quiet, understated */}
-      <section className="border-t border-navy/10 py-16">
-        <div className="border border-navy/15 px-5 py-4">
-          <p className="text-xs font-medium text-navy">
-            {COMPANY_NAME} &middot; Reg. {COMPANY_REG}
-          </p>
-          <p className="mt-2 text-xs leading-relaxed text-navy/60">
-            Grounds and maintenance work delivered for Sibanye-Stillwater, Royal Bafokeng
-            Administration and Rustenburg Local Municipality.
-          </p>
+        <div className="mt-3 flex items-center justify-between border border-navy/15 px-5 py-4">
+          <div>
+            <span className="text-lg font-semibold text-navy">R280</span>
+            <span className="ml-2 text-sm text-navy/50">once-off visit</span>
+          </div>
+          <a href={WHATSAPP_LINK} className="text-xs font-medium uppercase tracking-wide text-skyblue underline underline-offset-2">
+            WhatsApp to book
+          </a>
         </div>
       </section>
 
-      {/* 6. Signup form */}
+      <div className="border-t border-navy/10 py-10">
+        <a href="#signup-form" className={CTA_BUTTON_CLASS}>
+          Sign up now
+        </a>
+      </div>
+
+      {/* 10. Launch offer */}
       <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Launch offer</h2>
+        <p className="mt-6 text-[17px] leading-relaxed text-navy">
+          The first {LAUNCH_OFFER_SPOTS} customers get their second month free.
+        </p>
+        <p className="mt-2 text-sm text-navy/60">
+          {spotsLeft === null
+            ? "Checking spots..."
+            : spotsLeft > 0
+              ? `${spotsLeft} of ${LAUNCH_OFFER_SPOTS} spots left.`
+              : `All ${LAUNCH_OFFER_SPOTS} spots are taken.`}
+        </p>
+      </section>
+
+      {/* 11. Signup form */}
+      <section id="signup-form" className="border-t border-navy/10 py-16">
         <form onSubmit={handleSubmit} className="flex flex-col gap-10" noValidate>
           <fieldset>
             <legend className="mb-5 text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">
@@ -258,7 +358,7 @@ export default function SignupPage() {
         <form ref={formRef} method="POST" className="hidden" />
       </section>
 
-      {/* 7. Footer */}
+      {/* 12. Footer */}
       <footer className="border-t border-navy/10 py-10">
         <p className="text-sm text-navy/60">
           WhatsApp{" "}
@@ -266,6 +366,7 @@ export default function SignupPage() {
             {WHATSAPP_DISPLAY}
           </a>
         </p>
+        <p className="mt-1 text-sm text-navy/60">{COMPANY_NAME}, Platinum Village, Rustenburg</p>
       </footer>
     </main>
   );

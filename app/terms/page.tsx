@@ -94,8 +94,9 @@ export default function TermsPage() {
         />
         <p>Payment is by debit order through PayFast. The monthly amount comes off automatically on the same date each month.</p>
         <p>
-          <span className="font-medium text-navy">Launch offer:</span> the first 50 customers pay R100 per month for
-          their first two months. After two months the normal R200 applies automatically.
+          <span className="font-medium text-navy">Launch offer:</span> the first 50 customers get their second month
+          free. You pay the normal price when you sign up, and we refund your second month&apos;s payment once it is
+          due.
         </p>
       </Section>
 

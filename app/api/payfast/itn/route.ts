@@ -7,6 +7,7 @@ import {
   markPaymentFailed,
   cancelSignup,
   recordPayment,
+  markLaunchOfferEligibility,
 } from "@/lib/db";
 import { PLANS, isPlanId } from "@/lib/plans";
 
@@ -47,10 +48,16 @@ export async function POST(req: NextRequest) {
 
   const paymentStatus = result.data.payment_status;
   if (paymentStatus === "COMPLETE") {
+    const isFirstActivation = signup.start_date === null;
     await activateSignup(signup.id, result.data.token ?? null);
     const amount = Number.parseFloat(result.data.amount_gross ?? "");
     if (Number.isFinite(amount)) {
       await recordPayment(signup.id, amount, result.data.pf_payment_id ?? null);
+    }
+    // Only on the first payment, not every recurring renewal - tags the launch offer
+    // customers (manual refund, no automated discount billing) without extra writes.
+    if (isFirstActivation) {
+      await markLaunchOfferEligibility(signup.id);
     }
   } else if (paymentStatus === "FAILED") {
     // A single recurring charge failing does NOT cancel the subscription - it stays

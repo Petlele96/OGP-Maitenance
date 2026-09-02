@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import type { PlanId } from "./plans";
 import { SLOT_COUNT, toDateKey, visitDaysForSlot } from "./schedule";
+import { LAUNCH_OFFER_SPOTS } from "./site";
 
 let pool: Pool | null = null;
 
@@ -34,6 +35,7 @@ export interface SignupRow {
   cancelled_at: string | null;
   last_payment_failed_at: string | null;
   terms_accepted_at: string;
+  launch_offer_eligible: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -313,4 +315,59 @@ export async function getCompletionRateThisMonth(): Promise<{ done: number; sche
   );
 
   return { done: Number(doneRows[0].count), scheduled };
+}
+
+/**
+ * Called right after activateSignup() in the ITN handler. Deliberately re-checks the
+ * active count at the moment of activation (not at signup time) so eligibility tracks
+ * real paying customers, not abandoned signups - this activation is already counted
+ * as active by then, so <= LAUNCH_OFFER_SPOTS correctly includes it as the Nth customer.
+ * No billing effect - OGP handles the launch discount as a manual refund, this just
+ * tags who qualifies so they don't have to work it out by hand.
+ */
+export async function markLaunchOfferEligibility(signupId: string): Promise<void> {
+  await getPool().query(
+    `update signups
+     set launch_offer_eligible = true
+     where id = $1
+       and (select count(*) from signups where payment_status = 'active') <= $2`,
+    [signupId, LAUNCH_OFFER_SPOTS]
+  );
+}
+
+export async function getLaunchOfferSpotsLeft(): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    "select count(*) from signups where launch_offer_eligible = true"
+  );
+  return Math.max(0, LAUNCH_OFFER_SPOTS - Number(rows[0].count));
+}
+
+export interface LaunchOfferCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  startDate: string | null;
+}
+
+export async function getLaunchOfferCustomers(): Promise<LaunchOfferCustomer[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    start_date: string | null;
+  }>(
+    `select id, full_name, house_number, whatsapp_number, start_date
+     from signups
+     where launch_offer_eligible = true
+     order by start_date asc nulls last`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    startDate: r.start_date,
+  }));
 }

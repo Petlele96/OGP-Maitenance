@@ -6,6 +6,7 @@ import {
   getFailedOrOverdueCustomers,
   getCancellationsThisMonth,
   getCompletionRateThisMonth,
+  getLaunchOfferCustomers,
 } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -13,13 +14,14 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const [activeCustomers, revenueThisMonth, failedOrOverdue, cancellationsThisMonth, completion] =
+  const [activeCustomers, revenueThisMonth, failedOrOverdue, cancellationsThisMonth, completion, launchOfferCustomers] =
     await Promise.all([
       getActiveCustomerCounts(),
       getRevenueThisMonth(),
       getFailedOrOverdueCustomers(),
       getCancellationsThisMonth(),
       getCompletionRateThisMonth(),
+      getLaunchOfferCustomers(),
     ]);
 
   return NextResponse.json({
@@ -32,5 +34,6 @@ export async function GET(req: NextRequest) {
     failedOrOverdue,
     cancellationsThisMonth,
     completion,
+    launchOfferCustomers,
   });
 }
