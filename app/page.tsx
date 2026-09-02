@@ -99,7 +99,7 @@ export default function SignupPage() {
       {/* 5. Credibility */}
       <section className="mb-8 border-y border-navy/10 py-5 text-center">
         <p className="text-xs font-semibold text-navy">OGP Services (Pty) Ltd</p>
-        <p className="mt-0.5 text-xs text-navy/60">Registration 2019/343931</p>
+        <p className="mt-0.5 text-xs text-navy/60">Registration 2019/343931/07</p>
         <p className="mx-auto mt-2 max-w-xs text-xs leading-relaxed text-navy/70">
           Grounds and maintenance work delivered for Sibanye-Stillwater, Royal Bafokeng
           Administration and Rustenburg Local Municipality.
