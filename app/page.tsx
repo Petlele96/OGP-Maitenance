@@ -114,7 +114,8 @@ export default function SignupPage() {
         <a href="#signup-form" className={`${CTA_BUTTON_CLASS} mt-8`}>
           Sign up now
         </a>
-        <p className="mt-4 text-sm text-navy/50">Run from Platinum Village.</p>
+        <p className="mt-4 text-sm text-navy/50">Cancel any time. No contract.</p>
+        <p className="mt-1 text-sm text-navy/50">Run from Platinum Village.</p>
       </header>
 
       {/* 2. What R200 covers */}
@@ -193,13 +194,17 @@ export default function SignupPage() {
           <span className="text-7xl font-black tracking-tight text-navy">R200</span>
           <span className="text-base font-medium text-navy/40">per month</span>
         </div>
+        <p className="mt-2 text-sm text-navy/50">Cancel any time with 7 days&apos; notice on WhatsApp.</p>
 
-        <div className="mt-8 flex items-center justify-between border border-navy/15 px-5 py-4">
-          <div>
-            <span className="text-lg font-semibold text-navy">R2,000</span>
-            <span className="ml-2 text-sm text-navy/50">per year</span>
+        <div className="mt-8 border border-navy/15 px-5 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-lg font-semibold text-navy">R2,000</span>
+              <span className="ml-2 text-sm text-navy/50">per year</span>
+            </div>
+            <span className="text-xs font-medium uppercase tracking-wide text-skyblue">2 months free</span>
           </div>
-          <span className="text-xs font-medium uppercase tracking-wide text-skyblue">2 months free</span>
+          <p className="mt-2 text-sm text-navy/50">Paid upfront for the year. No refund on early cancellation.</p>
         </div>
 
         <div className="mt-3 flex items-center justify-between border border-navy/15 px-5 py-4">
