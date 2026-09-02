@@ -26,6 +26,11 @@ export const ASK_QUESTION_LINK = `${WHATSAPP_LINK}?text=${encodeURIComponent(
   "Hi OGP Services, I have a question about yard maintenance."
 )}`;
 
+/** "Report a problem" button on the signup page footer - opens WhatsApp to the business number. */
+export const REPORT_PROBLEM_LINK = `${WHATSAPP_LINK}?text=${encodeURIComponent(
+  "Hi OGP Services, I'd like to report a problem with my yard service. House number: "
+)}`;
+
 /** Sent from the ops Today list, once a once-off job is marked done - pitches the monthly plan. */
 export function buildFollowUpMessage(fullName: string): string {
   const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;

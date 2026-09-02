@@ -8,6 +8,7 @@ import {
   WHATSAPP_DISPLAY,
   WHATSAPP_LINK,
   ASK_QUESTION_LINK,
+  REPORT_PROBLEM_LINK,
   COMPANY_NAME,
   COMPANY_REG,
   LAUNCH_OFFER_SPOTS,
@@ -352,27 +353,33 @@ export default function SignupPage() {
             </div>
           </fieldset>
 
-          <label className="flex items-start gap-3">
-            <input
-              type="checkbox"
-              required
-              checked={agreedToTerms}
-              onChange={(e) => setAgreedToTerms(e.target.checked)}
-              className="mt-0.5 h-4 w-4 flex-shrink-0 accent-skyblue"
-            />
-            <span className="text-sm leading-relaxed text-navy/70">
-              I have read and agree to the{" "}
-              <Link
-                href="/terms"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-navy underline underline-offset-2"
-              >
-                Terms and Conditions
-              </Link>
-              .
-            </span>
-          </label>
+          <div>
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                required
+                checked={agreedToTerms}
+                onChange={(e) => setAgreedToTerms(e.target.checked)}
+                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-skyblue"
+              />
+              <span className="text-sm leading-relaxed text-navy/70">
+                I have read and agree to the{" "}
+                <Link
+                  href="/terms"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-navy underline underline-offset-2"
+                >
+                  Terms and Conditions
+                </Link>
+                .
+              </span>
+            </label>
+            <p className="mt-3 text-sm leading-relaxed text-navy/50">
+              Not happy with the work? Send us a photo on WhatsApp within 48 hours and we&apos;ll come back and fix
+              it, free.
+            </p>
+          </div>
 
           {error && (
             <p className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
@@ -411,6 +418,9 @@ export default function SignupPage() {
         <p className="mt-1 text-sm text-navy/60">{COMPANY_NAME}, Platinum Village, Rustenburg</p>
         <a href={ASK_QUESTION_LINK} className={`${SECONDARY_BUTTON_CLASS} mt-6`}>
           Ask a question
+        </a>
+        <a href={REPORT_PROBLEM_LINK} className={`${SECONDARY_BUTTON_CLASS} mt-3`}>
+          Report a problem
         </a>
       </footer>
     </main>
