@@ -55,34 +55,40 @@ export default function SignupPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col bg-white px-5 pb-10 pt-8 text-navy">
+    <main className="mx-auto max-w-lg bg-white px-6 text-navy">
       {/* 1. Logo + headline */}
-      <header className="mb-8 text-center">
-        <Image src="/logo.png" alt="OGP Services" width={320} height={320} priority className="mx-auto h-auto w-32" />
-        <h1 className="mt-4 text-2xl font-bold leading-snug text-navy">
-          Platinum Village yards, kept tidy all year round
+      <header className="pb-16 pt-14">
+        <Image src="/logo.png" alt="OGP Services" width={320} height={320} priority className="h-9 w-auto" />
+        <p className="mt-10 text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">
+          Platinum Village, Rustenburg
+        </p>
+        <h1 className="mt-3 text-[46px] font-extrabold leading-[1.05] tracking-tight text-navy sm:text-[52px]">
+          Yards kept tidy, all year round.
         </h1>
       </header>
 
-      {/* 2. Price, stated immediately */}
-      <section className="mb-8 grid grid-cols-2 gap-3">
-        <div className="rounded-2xl border border-skyblue/25 bg-skyblue/5 px-4 py-5 text-center">
-          <p className="text-2xl font-bold text-navy">R200</p>
-          <p className="mt-0.5 text-xs font-semibold uppercase tracking-wide text-skyblue">per month</p>
+      {/* 2. Price - the hero */}
+      <section className="border-t border-navy/10 py-16">
+        <div className="flex items-baseline gap-2">
+          <span className="text-6xl font-extrabold tracking-tight text-navy">R200</span>
+          <span className="text-base font-medium text-navy/50">per month</span>
         </div>
-        <div className="rounded-2xl border border-skyblue/25 bg-skyblue/5 px-4 py-5 text-center">
-          <p className="text-2xl font-bold text-navy">R2,000</p>
-          <p className="mt-0.5 text-xs font-semibold uppercase tracking-wide text-skyblue">per year</p>
+
+        <div className="mt-8 flex items-center justify-between border border-navy/15 px-5 py-4">
+          <div>
+            <span className="text-lg font-semibold text-navy">R2,000</span>
+            <span className="ml-2 text-sm text-navy/50">per year</span>
+          </div>
+          <span className="text-xs font-medium uppercase tracking-wide text-skyblue">2 months free</span>
         </div>
       </section>
 
       {/* 3. What's included */}
-      <section className="mb-8">
-        <h2 className="text-xs font-bold uppercase tracking-wide text-skyblue">What&apos;s included</h2>
-        <ul className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2.5 text-sm text-navy">
+      <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">What&apos;s included</h2>
+        <ul className="mt-6 space-y-3">
           {SERVICES.map((service) => (
-            <li key={service} className="flex items-center gap-2">
-              <span className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-skyblue" />
+            <li key={service} className="text-[17px] leading-relaxed text-navy">
               {service}
             </li>
           ))}
@@ -90,142 +96,151 @@ export default function SignupPage() {
       </section>
 
       {/* 4. Schedule */}
-      <section className="mb-8">
-        <h2 className="text-xs font-bold uppercase tracking-wide text-skyblue">Schedule</h2>
-        <p className="mt-3 text-sm text-navy">Twice a month, September to April.</p>
-        <p className="text-sm text-navy">Once a month, May to August.</p>
+      <section className="border-t border-navy/10 py-16">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">Schedule</h2>
+        <p className="mt-6 text-[17px] leading-relaxed text-navy">
+          Twice a month, September to April.
+          <br />
+          Once a month, May to August.
+        </p>
       </section>
 
-      {/* 5. Credibility */}
-      <section className="mb-8 border-y border-navy/10 py-5 text-center">
-        <p className="text-xs font-semibold text-navy">OGP Services (Pty) Ltd</p>
-        <p className="mt-0.5 text-xs text-navy/60">Registration 2019/343931/07</p>
-        <p className="mx-auto mt-2 max-w-xs text-xs leading-relaxed text-navy/70">
-          Grounds and maintenance work delivered for Sibanye-Stillwater, Royal Bafokeng
-          Administration and Rustenburg Local Municipality.
-        </p>
+      {/* 5. Credibility - quiet, understated */}
+      <section className="border-t border-navy/10 py-16">
+        <div className="border border-navy/15 px-5 py-4">
+          <p className="text-xs font-medium text-navy">OGP Services (Pty) Ltd &middot; Reg. 2019/343931/07</p>
+          <p className="mt-2 text-xs leading-relaxed text-navy/60">
+            Grounds and maintenance work delivered for Sibanye-Stillwater, Royal Bafokeng
+            Administration and Rustenburg Local Municipality.
+          </p>
+        </div>
       </section>
 
       {/* 6. Signup form */}
-      <form onSubmit={handleSubmit} className="flex flex-col gap-5" noValidate>
-        <fieldset className="rounded-2xl border border-navy/10 p-5">
-          <legend className="px-1 text-sm font-semibold text-navy">Choose your plan</legend>
-          <div className="mt-2 flex flex-col gap-3">
-            {Object.values(PLANS).map((p) => (
-              <label
-                key={p.id}
-                className={`flex cursor-pointer items-center justify-between rounded-xl border-2 p-4 transition ${
-                  plan === p.id ? "border-skyblue bg-skyblue/5" : "border-navy/10"
-                }`}
-              >
-                <span className="flex items-center gap-3">
-                  <input
-                    type="radio"
-                    name="plan"
-                    value={p.id}
-                    checked={plan === p.id}
-                    onChange={() => setPlan(p.id)}
-                    className="h-5 w-5 accent-skyblue"
-                  />
-                  <span>
-                    <span className="block font-semibold text-navy">{p.label}</span>
-                    <span className="block text-sm text-navy/70">{p.priceLine}</span>
+      <section className="border-t border-navy/10 py-16">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-10" noValidate>
+          <fieldset>
+            <legend className="mb-5 text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">
+              Choose your plan
+            </legend>
+            <div className="flex flex-col gap-3">
+              {Object.values(PLANS).map((p) => (
+                <label
+                  key={p.id}
+                  className={`flex cursor-pointer items-center justify-between border px-5 py-4 transition ${
+                    plan === p.id ? "border-skyblue" : "border-navy/15"
+                  }`}
+                >
+                  <span className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="plan"
+                      value={p.id}
+                      checked={plan === p.id}
+                      onChange={() => setPlan(p.id)}
+                      className="h-4 w-4 accent-skyblue"
+                    />
+                    <span>
+                      <span className="block text-base font-medium text-navy">{p.label}</span>
+                      <span className="block text-sm text-navy/50">{p.priceLine}</span>
+                    </span>
                   </span>
-                </span>
-                {p.badge && (
-                  <span className="rounded-full bg-skyblue px-2.5 py-1 text-xs font-semibold text-white">
-                    {p.badge}
-                  </span>
-                )}
+                  {p.badge && (
+                    <span className="text-xs font-medium uppercase tracking-wide text-skyblue">{p.badge}</span>
+                  )}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="flex flex-col gap-5">
+            <legend className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-skyblue">
+              Your details
+            </legend>
+
+            <div className="flex flex-col gap-2">
+              <label htmlFor="fullName" className="text-sm font-medium text-navy/70">
+                Full name
               </label>
-            ))}
+              <input
+                id="fullName"
+                type="text"
+                inputMode="text"
+                autoComplete="name"
+                required
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="e.g. Thabo Mokoena"
+                className="h-14 border border-navy/15 px-4 text-base text-navy outline-none focus:border-skyblue"
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label htmlFor="houseNumber" className="text-sm font-medium text-navy/70">
+                House number
+              </label>
+              <input
+                id="houseNumber"
+                type="text"
+                inputMode="text"
+                required
+                value={houseNumber}
+                onChange={(e) => setHouseNumber(e.target.value)}
+                placeholder="e.g. 42"
+                className="h-14 border border-navy/15 px-4 text-base text-navy outline-none focus:border-skyblue"
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label htmlFor="whatsappNumber" className="text-sm font-medium text-navy/70">
+                WhatsApp number
+              </label>
+              <input
+                id="whatsappNumber"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                required
+                value={whatsappNumber}
+                onChange={(e) => setWhatsappNumber(e.target.value)}
+                placeholder="e.g. 082 123 4567"
+                className="h-14 border border-navy/15 px-4 text-base text-navy outline-none focus:border-skyblue"
+              />
+            </div>
+          </fieldset>
+
+          {error && (
+            <p className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+              {error}
+            </p>
+          )}
+
+          <div>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="h-14 w-full rounded-lg bg-cta text-base font-medium text-white transition hover:brightness-95 active:brightness-90 disabled:opacity-60"
+            >
+              {submitting ? "Redirecting to secure payment..." : "Continue to secure payment"}
+            </button>
+            <p className="mt-4 text-xs leading-relaxed text-navy/50">
+              You&apos;ll be redirected to PayFast to set up secure recurring billing. Cancel anytime.
+            </p>
           </div>
-        </fieldset>
+        </form>
 
-        <fieldset className="flex flex-col gap-4 rounded-2xl border border-navy/10 p-5">
-          <legend className="px-1 text-sm font-semibold text-navy">Your details</legend>
-
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="fullName" className="text-sm font-medium text-navy/80">
-              Full name
-            </label>
-            <input
-              id="fullName"
-              type="text"
-              inputMode="text"
-              autoComplete="name"
-              required
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="e.g. Thabo Mokoena"
-              className="rounded-xl border border-navy/20 px-4 py-3 text-base text-navy outline-none focus:border-skyblue focus:ring-2 focus:ring-skyblue/10"
-            />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="houseNumber" className="text-sm font-medium text-navy/80">
-              House number
-            </label>
-            <input
-              id="houseNumber"
-              type="text"
-              inputMode="text"
-              required
-              value={houseNumber}
-              onChange={(e) => setHouseNumber(e.target.value)}
-              placeholder="e.g. 42"
-              className="rounded-xl border border-navy/20 px-4 py-3 text-base text-navy outline-none focus:border-skyblue focus:ring-2 focus:ring-skyblue/10"
-            />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="whatsappNumber" className="text-sm font-medium text-navy/80">
-              WhatsApp number
-            </label>
-            <input
-              id="whatsappNumber"
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              required
-              value={whatsappNumber}
-              onChange={(e) => setWhatsappNumber(e.target.value)}
-              placeholder="e.g. 082 123 4567"
-              className="rounded-xl border border-navy/20 px-4 py-3 text-base text-navy outline-none focus:border-skyblue focus:ring-2 focus:ring-skyblue/10"
-            />
-          </div>
-        </fieldset>
-
-        {error && (
-          <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-            {error}
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full rounded-xl bg-cta px-4 py-4 text-base font-semibold text-white shadow-sm transition hover:brightness-95 active:brightness-90 disabled:opacity-60"
-        >
-          {submitting ? "Redirecting to secure payment..." : "Continue to secure payment"}
-        </button>
-
-        <p className="text-center text-xs text-navy/60">
-          You&apos;ll be redirected to PayFast to set up secure recurring billing. Cancel anytime.
-        </p>
-      </form>
-
-      {/* Populated and submitted programmatically once /api/signup returns the signed PayFast fields. */}
-      <form ref={formRef} method="POST" className="hidden" />
+        {/* Populated and submitted programmatically once /api/signup returns the signed PayFast fields. */}
+        <form ref={formRef} method="POST" className="hidden" />
+      </section>
 
       {/* 7. Footer */}
-      <footer className="mt-10 text-center">
-        <a
-          href={WHATSAPP_LINK}
-          className="inline-flex items-center gap-2 rounded-full border-2 border-cta px-5 py-2.5 text-sm font-semibold text-cta transition hover:bg-cta hover:text-white"
-        >
-          WhatsApp us: {WHATSAPP_DISPLAY}
-        </a>
+      <footer className="border-t border-navy/10 py-10">
+        <p className="text-sm text-navy/60">
+          WhatsApp{" "}
+          <a href={WHATSAPP_LINK} className="text-navy underline underline-offset-2">
+            {WHATSAPP_DISPLAY}
+          </a>
+        </p>
       </footer>
     </main>
   );
