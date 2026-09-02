@@ -14,7 +14,16 @@ import {
   LAUNCH_OFFER_SPOTS,
 } from "@/lib/site";
 
-const INCLUDED = ["Cutting", "Weeding", "Edging", "Garden cuttings removed and bagged", "General tidy"];
+const COVERAGE_ITEMS = [
+  "Grass cut to an even height, front and back",
+  "Edges trimmed along walls, paving, fences and driveway",
+  "Weeds pulled from paving, gravel and along the wall line",
+  "Weed treatment applied to paving and gravel to slow regrowth between visits",
+  "Pavement and kerb outside your gate cleaned and cleared",
+  "All cuttings raked, bagged and taken away",
+  "Yard swept and left tidy",
+  "Two visits every month, September to April",
+];
 const STEPS = ["You sign up.", "You get your service day.", "We WhatsApp you the day before.", "We come and do the work."];
 const WORKER_POINTS = [
   "Our workers are known to us.",
@@ -100,10 +109,6 @@ export default function SignupPage() {
         <h1 className="mt-10 text-[56px] font-black leading-[1.02] tracking-tight text-navy sm:text-[64px]">
           Your yard, kept tidy, all year round.
         </h1>
-        {/* Full-width slot reserved for a before/after photo. */}
-        <div className="mt-10 flex aspect-[4/3] w-full items-center justify-center border border-navy/15 bg-navy/5">
-          <span className="text-sm font-medium text-navy/40">Before / after photo</span>
-        </div>
       </header>
 
       {/* 2. Intro */}
@@ -124,18 +129,18 @@ export default function SignupPage() {
         </p>
       </section>
 
-      {/* 4. What's included */}
+      {/* 4. What R200 covers */}
       <section className="border-t border-navy/10 py-24">
-        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">What&apos;s included</h2>
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">What R200 covers</h2>
         <ul className="mt-6 space-y-3">
-          {INCLUDED.map((item) => (
+          {COVERAGE_ITEMS.map((item) => (
             <li key={item} className="text-[17px] leading-relaxed text-navy">
               {item}
             </li>
           ))}
         </ul>
         <p className="mt-6 text-sm leading-relaxed text-navy/60">
-          Not included: household refuse. That stays with the municipality on Thursdays.
+          That&apos;s roughly R100 a visit — less than a car wash, for your whole property.
         </p>
       </section>
 
