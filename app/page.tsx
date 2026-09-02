@@ -23,6 +23,7 @@ export default function SignupPage() {
   const [fullName, setFullName] = useState("");
   const [houseNumber, setHouseNumber] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
+  const [block, setBlock] = useState("");
   const [plan, setPlan] = useState<PlanId>("monthly");
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -46,7 +47,14 @@ export default function SignupPage() {
       const res = await fetch("/api/signup", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ fullName, houseNumber, whatsappNumber, plan, agreedToTerms }),
+        body: JSON.stringify({
+          fullName,
+          houseNumber,
+          whatsappNumber,
+          plan,
+          agreedToTerms,
+          block: block === "" ? null : Number(block),
+        }),
       });
       const data = await res.json();
 
@@ -292,6 +300,25 @@ export default function SignupPage() {
                 placeholder="e.g. 42"
                 className="h-14 border border-navy/15 px-4 text-base text-navy outline-none focus:border-skyblue"
               />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label htmlFor="block" className="text-sm font-medium text-navy/70">
+                Block <span className="font-normal text-navy/40">(optional)</span>
+              </label>
+              <select
+                id="block"
+                value={block}
+                onChange={(e) => setBlock(e.target.value)}
+                className="h-14 border border-navy/15 bg-white px-4 text-base text-navy outline-none focus:border-skyblue"
+              >
+                <option value="">Not sure / no block</option>
+                {[1, 2, 3, 4, 5, 6].map((b) => (
+                  <option key={b} value={b}>
+                    Block {b}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="flex flex-col gap-2">

@@ -1,15 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { buildReminderLink } from "@/lib/site";
 
-type ViewMode = "today" | "week";
+type ViewMode = "today" | "tomorrow" | "week";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
+
+interface BlockGroup<T> {
+  block: number | null;
+  customers: T[];
+}
 
 interface TodayCustomer {
   id: string;
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
+  block: number | null;
   done: boolean;
   completedAt: string | null;
 }
@@ -18,7 +25,21 @@ interface TodayData {
   date: string;
   total: number;
   doneCount: number;
-  customers: TodayCustomer[];
+  groups: BlockGroup<TodayCustomer>[];
+}
+
+interface TomorrowCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  block: number | null;
+}
+
+interface TomorrowData {
+  date: string;
+  total: number;
+  groups: BlockGroup<TomorrowCustomer>[];
 }
 
 interface WeekDay {
@@ -35,6 +56,10 @@ function formatDayHeading(dateKey: string): string {
   return date.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
 }
 
+function blockHeading(block: number | null): string {
+  return block === null ? "No block set" : `Block ${block}`;
+}
+
 export default function OpsPage() {
   const [authState, setAuthState] = useState<AuthState>("checking");
   const [password, setPassword] = useState("");
@@ -43,6 +68,7 @@ export default function OpsPage() {
 
   const [view, setView] = useState<ViewMode>("today");
   const [today, setToday] = useState<TodayData | null>(null);
+  const [tomorrow, setTomorrow] = useState<TomorrowData | null>(null);
   const [week, setWeek] = useState<WeekDay[] | null>(null);
   const [completingId, setCompletingId] = useState<string | null>(null);
 
@@ -54,6 +80,15 @@ export default function OpsPage() {
     }
     setToday(await res.json());
     setAuthState("authenticated");
+  }, []);
+
+  const loadTomorrow = useCallback(async () => {
+    const res = await fetch("/api/ops/tomorrow", { cache: "no-store" });
+    if (res.status === 401) {
+      setAuthState("unauthenticated");
+      return;
+    }
+    setTomorrow(await res.json());
   }, []);
 
   const loadWeek = useCallback(async () => {
@@ -71,10 +106,10 @@ export default function OpsPage() {
   }, [loadToday]);
 
   useEffect(() => {
-    if (authState === "authenticated" && view === "week" && !week) {
-      loadWeek();
-    }
-  }, [authState, view, week, loadWeek]);
+    if (authState !== "authenticated") return;
+    if (view === "tomorrow" && !tomorrow) loadTomorrow();
+    if (view === "week" && !week) loadWeek();
+  }, [authState, view, tomorrow, week, loadTomorrow, loadWeek]);
 
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
@@ -105,13 +140,16 @@ export default function OpsPage() {
       const data = await res.json();
       setToday((prev) => {
         if (!prev) return prev;
-        const alreadyDone = prev.customers.find((c) => c.id === signupId)?.done;
+        const alreadyDone = prev.groups.some((g) => g.customers.some((c) => c.id === signupId && c.done));
         return {
           ...prev,
           doneCount: alreadyDone ? prev.doneCount : prev.doneCount + 1,
-          customers: prev.customers.map((c) =>
-            c.id === signupId ? { ...c, done: true, completedAt: data.completedAt } : c
-          ),
+          groups: prev.groups.map((g) => ({
+            ...g,
+            customers: g.customers.map((c) =>
+              c.id === signupId ? { ...c, done: true, completedAt: data.completedAt } : c
+            ),
+          })),
         };
       });
     }
@@ -122,6 +160,7 @@ export default function OpsPage() {
     await fetch("/api/ops/logout", { method: "POST" });
     setAuthState("unauthenticated");
     setToday(null);
+    setTomorrow(null);
     setWeek(null);
   }
 
@@ -180,6 +219,12 @@ export default function OpsPage() {
           Today
         </button>
         <button
+          onClick={() => setView("tomorrow")}
+          className={`flex-1 rounded-lg py-2 text-sm font-semibold ${view === "tomorrow" ? "bg-brand-600 text-white" : "text-brand-700"}`}
+        >
+          Tomorrow
+        </button>
+        <button
           onClick={() => setView("week")}
           className={`flex-1 rounded-lg py-2 text-sm font-semibold ${view === "week" ? "bg-brand-600 text-white" : "text-brand-700"}`}
         >
@@ -196,40 +241,93 @@ export default function OpsPage() {
             <span className="text-sm"> remaining</span>
           </div>
 
-          {today.customers.length === 0 ? (
+          {today.total === 0 ? (
             <p className="mt-8 text-center text-sm text-brand-500">No visits scheduled for today.</p>
           ) : (
-            <ul className="flex flex-col gap-3">
-              {today.customers.map((c) => (
-                <li
-                  key={c.id}
-                  className={`flex items-center justify-between rounded-2xl p-4 shadow-sm ring-1 ${
-                    c.done ? "bg-brand-50 ring-brand-100" : "bg-white ring-brand-100"
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <p className="font-semibold text-brand-900">{c.fullName}</p>
-                    <p className="text-sm text-brand-700">House {c.houseNumber}</p>
-                    <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
-                      {c.whatsappNumber}
-                    </a>
-                  </div>
-                  {c.done ? (
-                    <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-sm font-semibold text-brand-700">
-                      ✓ {c.completedAt ? formatTime(c.completedAt) : "Done"}
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => handleDone(c.id)}
-                      disabled={completingId === c.id}
-                      className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                    >
-                      Done
-                    </button>
-                  )}
-                </li>
+            <div className="flex flex-col gap-6">
+              {today.groups.map((group) => (
+                <div key={group.block ?? "none"}>
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-500">
+                    {blockHeading(group.block)}
+                  </h2>
+                  <ul className="flex flex-col gap-3">
+                    {group.customers.map((c) => (
+                      <li
+                        key={c.id}
+                        className={`flex items-center justify-between rounded-2xl p-4 shadow-sm ring-1 ${
+                          c.done ? "bg-brand-50 ring-brand-100" : "bg-white ring-brand-100"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <p className="font-semibold text-brand-900">{c.fullName}</p>
+                          <p className="text-sm text-brand-700">House {c.houseNumber}</p>
+                          <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
+                            {c.whatsappNumber}
+                          </a>
+                        </div>
+                        {c.done ? (
+                          <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-sm font-semibold text-brand-700">
+                            ✓ {c.completedAt ? formatTime(c.completedAt) : "Done"}
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleDone(c.id)}
+                            disabled={completingId === c.id}
+                            className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                          >
+                            Done
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
+          )}
+        </>
+      )}
+
+      {view === "tomorrow" && (
+        <>
+          {!tomorrow ? (
+            <p className="mt-8 text-center text-sm text-brand-500">Loading...</p>
+          ) : tomorrow.total === 0 ? (
+            <p className="mt-8 text-center text-sm text-brand-500">No visits scheduled for tomorrow.</p>
+          ) : (
+            <div className="flex flex-col gap-6">
+              <p className="text-sm text-brand-600">
+                {tomorrow.total} customer{tomorrow.total === 1 ? "" : "s"} tomorrow. Send reminders now.
+              </p>
+              {tomorrow.groups.map((group) => (
+                <div key={group.block ?? "none"}>
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-500">
+                    {blockHeading(group.block)}
+                  </h2>
+                  <ul className="flex flex-col gap-3">
+                    {group.customers.map((c) => (
+                      <li
+                        key={c.id}
+                        className="flex items-center justify-between rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-semibold text-brand-900">{c.fullName}</p>
+                          <p className="text-sm text-brand-700">House {c.houseNumber}</p>
+                        </div>
+                        <a
+                          href={buildReminderLink(c.fullName, c.whatsappNumber)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white"
+                        >
+                          Remind
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
           )}
         </>
       )}

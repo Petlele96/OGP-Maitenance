@@ -36,6 +36,7 @@ export interface SignupRow {
   last_payment_failed_at: string | null;
   terms_accepted_at: string;
   launch_offer_eligible: boolean;
+  block: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -60,16 +61,17 @@ export async function createSignup(input: {
   whatsappNumber: string;
   plan: PlanId;
   amount: number;
+  block: number | null;
 }): Promise<SignupRow> {
   const id = randomUUID();
   const slot = await pickLeastLoadedSlot();
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls createSignup after the zod schema has confirmed agreedToTerms === true.
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now())
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
      returning *`,
-    [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount, id, slot]
+    [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount, id, slot, input.block]
   );
   return rows[0];
 }
@@ -145,12 +147,12 @@ export interface ServiceVisitRow {
   completed_at: string;
 }
 
+/** Unordered - callers sort/group with lib/sort.ts (a plain SQL text order misorders numeric house numbers). */
 export async function getActiveSignupsForSlots(slots: number[]): Promise<SignupRow[]> {
   if (slots.length === 0) return [];
   const { rows } = await getPool().query<SignupRow>(
     `select * from signups
-     where payment_status = 'active' and service_slot = any($1)
-     order by house_number`,
+     where payment_status = 'active' and service_slot = any($1)`,
     [slots]
   );
   return rows;

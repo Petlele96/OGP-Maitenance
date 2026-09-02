@@ -36,6 +36,9 @@ alter table signups add column if not exists cancelled_at timestamptz;
 alter table signups add column if not exists last_payment_failed_at timestamptz;
 alter table signups add column if not exists terms_accepted_at timestamptz;
 alter table signups add column if not exists launch_offer_eligible boolean not null default false;
+-- Optional, not compulsory - some streets have no name and some tenants don't know theirs.
+-- Values 1-6 (validated in application code, not a DB check, to keep this migration idempotent).
+alter table signups add column if not exists block integer;
 
 create table if not exists payments (
   id uuid primary key default gen_random_uuid(),

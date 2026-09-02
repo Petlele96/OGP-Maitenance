@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/ops-auth";
 import { candidateSlotForDate, getWeekDates, toDateKey } from "@/lib/schedule";
 import { getActiveSignupsForSlots, getVisitsForDates } from "@/lib/db";
+import { compareHouseNumbers } from "@/lib/sort";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
             houseNumber: s.house_number,
             done: doneKeys.has(`${s.id}|${dateKey}`),
           }))
+          .sort((a, b) => compareHouseNumbers(a.houseNumber, b.houseNumber))
       : [];
     return { date: dateKey, customers };
   });

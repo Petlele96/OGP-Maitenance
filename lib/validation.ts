@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MIN_BLOCK, MAX_BLOCK } from "./sort";
 
 // South African mobile numbers: 0821234567, +27821234567, or 27821234567
 const SA_MOBILE_REGEX = /^(0|27|\+27)[6-8][0-9]{8}$/;
@@ -19,6 +20,8 @@ export const signupSchema = z.object({
   agreedToTerms: z.literal(true, {
     errorMap: () => ({ message: "You must agree to the Terms and Conditions" }),
   }),
+  // Not compulsory - some streets have no name, some tenants don't know theirs.
+  block: z.number().int().min(MIN_BLOCK).max(MAX_BLOCK).nullable().optional(),
 });
 
 export type SignupInput = z.infer<typeof signupSchema>;
