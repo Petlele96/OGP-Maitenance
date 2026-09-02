@@ -1,15 +1,19 @@
-# OGP Services - Yard Maintenance Signup
+# OGP Services - Yard Maintenance Signup + Operations
 
-Single mobile-first page for customers in Platinum Village, Rustenburg to sign up for
-recurring yard maintenance (R200/month or R2,000/year) and pay via a PayFast recurring
-subscription. No login. Signups are only marked `active` once PayFast's ITN webhook
-confirms the payment - never on the strength of the browser redirect alone.
+Two mobile-first pages for OGP Services (Platinum Village, Rustenburg):
+
+- **`/`** - customer signup (no login): pick a plan (R200/month or R2,000/year), pay via
+  a PayFast recurring subscription. Signups are only marked `active` once PayFast's ITN
+  webhook confirms the payment - never on the strength of the browser redirect alone.
+- **`/ops`** - password-gated operator view: today's visit list, a done/remaining
+  counter, a this-week look-ahead, and a Done button per customer. See "Scheduling"
+  below for how visit days are assigned.
 
 ## Stack
 
 - Next.js 14 (App Router) + TypeScript + Tailwind CSS
-- Postgres via `@neondatabase/serverless` (works with Neon or Vercel Postgres, which is
-  Neon-backed)
+- Postgres via `pg` (node-postgres) - currently pointed at a Supabase Postgres database
+  provisioned through Vercel's Storage tab, accessed via its pooled connection string
 - PayFast recurring billing (Custom Integration / hosted checkout redirect)
 
 ## Local setup
@@ -21,10 +25,11 @@ cp .env.example .env.local
 
 `.env.local` ships pointing at PayFast's public **sandbox** credentials, so you can test
 the whole flow without a real merchant account. You still need a real Postgres database -
-create one (e.g. at neon.com, or via Vercel's Storage tab) and put its connection string in
-`DATABASE_URL`.
+create one (e.g. via Vercel's Storage tab, or at neon.com / supabase.com directly) and put
+its connection string in `DATABASE_URL`. Also set `OPERATIONS_PASSWORD` to whatever you
+want the `/ops` login to be locally.
 
-Create the `signups` table:
+Apply the schema (creates `signups` and `service_visits`, safe to re-run):
 
 ```bash
 npm run db:migrate
@@ -47,10 +52,11 @@ public URL - see below.
 ## Deploying to Vercel
 
 1. Push this repo to GitHub and import it into Vercel.
-2. In the Vercel project, add a Postgres database (Storage tab -> Postgres, which
-   provisions a Neon database) or connect an existing Neon database. Vercel sets
-   `DATABASE_URL` (or `POSTGRES_URL` - if you get that instead, add a `DATABASE_URL` env
-   var pointing at the same value) automatically.
+2. In the Vercel project, add a Postgres database (Storage tab -> Postgres). This
+   provisions through a marketplace integration (Neon or Supabase depending on what's
+   offered) and auto-injects a connection string as `POSTGRES_URL` - `lib/db.ts` and
+   `scripts/migrate.mjs` both fall back to `POSTGRES_URL` if `DATABASE_URL` isn't set, so
+   no extra step is needed there.
 3. Set the remaining environment variables in Vercel (Project Settings -> Environment
    Variables):
    - `PAYFAST_MERCHANT_ID`
@@ -59,7 +65,9 @@ public URL - see below.
    - `PAYFAST_MODE` (`sandbox` until you're ready to go live)
    - `NEXT_PUBLIC_BASE_URL` (your Vercel deployment URL, e.g.
      `https://ogp-services.vercel.app`)
-4. Deploy. Then run the migration against the production database once:
+   - `OPERATIONS_PASSWORD` (the shared password for `/ops`)
+4. Deploy. Then run the migration against the production database once (pull the real
+   connection string from Vercel first, e.g. via `vercel env pull`):
    ```bash
    DATABASE_URL="<production connection string>" npm run db:migrate
    ```
@@ -82,9 +90,22 @@ public URL - see below.
    - The corresponding row in `signups` has `payment_status = 'active'` and a populated
      `payfast_subscription_token`.
 
+## Scheduling
+
+Each customer is visited **twice a month**, on a fixed day-of-month pair ~14 days apart.
+`signups.service_slot` is a number 1-14; slot `N` means visited on day `N` and day `N+14`
+of every month (capped at 28 so every month, even February, behaves identically - the
+last day or few of longer months are simply always free). A new signup is assigned
+whichever slot currently has the fewest *active* customers (recomputed fresh each time,
+not round-robin), so the load self-balances over time even as customers churn. See
+`lib/schedule.ts` for the (pure, easily testable) date math, and the plan file's
+"Scheduling design" section for the full reasoning.
+
 ## Data model
 
-One table, `signups` (see `db/schema.sql`):
+`db/schema.sql` - two tables:
+
+**`signups`**
 
 | column                        | notes                                              |
 | ------------------------------ | --------------------------------------------------- |
@@ -97,6 +118,10 @@ One table, `signups` (see `db/schema.sql`):
 | `payment_status`                | `pending` -> `active` (or `failed` / `cancelled`)   |
 | `payfast_subscription_token`    | PayFast's token for this subscription (from ITN)   |
 | `payfast_m_payment_id`          | our reference PayFast echoes back on every ITN call |
+| `service_slot`                  | 1-14, assigned at signup (see Scheduling above)     |
+
+**`service_visits`** - one row per completed visit, `unique (signup_id, service_date)` so
+tapping Done twice is a no-op rather than a duplicate.
 
 ## How the PayFast integration works
 
@@ -118,4 +143,6 @@ SDK (`github.com/Payfast/payfast-php-sdk`), ported to TypeScript in `lib/payfast
 
 - No subscription management (pause/cancel/update) UI - PayFast's Subscriptions API
   supports this if needed later, but it wasn't in scope.
-- No admin view of signups - query the database directly for now.
+- `/ops` covers today's/this week's visit checklist only - no photos, notes, GPS,
+  customer messaging, or reports, and no way to reassign a customer's service slot after
+  signup (would need a direct database update for now).
