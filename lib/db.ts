@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import type { PlanId } from "./plans";
+import { SLOT_COUNT } from "./schedule";
 
 let pool: Pool | null = null;
 
@@ -29,8 +30,23 @@ export interface SignupRow {
   payment_status: "pending" | "active" | "failed" | "cancelled";
   payfast_subscription_token: string | null;
   payfast_m_payment_id: string;
+  service_slot: number;
   created_at: string;
   updated_at: string;
+}
+
+/** The slot with the fewest active customers right now, ties broken by lowest slot number. */
+async function pickLeastLoadedSlot(): Promise<number> {
+  const { rows } = await getPool().query<{ slot: number; count: string }>(
+    `select gs as slot, count(s.id) as count
+     from generate_series(1, $1) as gs
+     left join signups s on s.service_slot = gs and s.payment_status = 'active'
+     group by gs
+     order by count(s.id) asc, gs asc
+     limit 1`,
+    [SLOT_COUNT]
+  );
+  return rows[0].slot;
 }
 
 export async function createSignup(input: {
@@ -41,11 +57,12 @@ export async function createSignup(input: {
   amount: number;
 }): Promise<SignupRow> {
   const id = randomUUID();
+  const slot = await pickLeastLoadedSlot();
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id)
-     values ($1, $2, $3, $4, $5, $6, $7)
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)
      returning *`,
-    [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount, id]
+    [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount, id, slot]
   );
   return rows[0];
 }
@@ -80,4 +97,45 @@ export async function markSignupFailed(id: string): Promise<void> {
     "update signups set payment_status = 'failed', updated_at = now() where id = $1 and payment_status = 'pending'",
     [id]
   );
+}
+
+export interface ServiceVisitRow {
+  signup_id: string;
+  service_date: string;
+  completed_at: string;
+}
+
+export async function getActiveSignupsForSlots(slots: number[]): Promise<SignupRow[]> {
+  if (slots.length === 0) return [];
+  const { rows } = await getPool().query<SignupRow>(
+    `select * from signups
+     where payment_status = 'active' and service_slot = any($1)
+     order by house_number`,
+    [slots]
+  );
+  return rows;
+}
+
+/** service_date cast to text so pg returns a plain 'YYYY-MM-DD' string, not a Date object. */
+export async function getVisitsForDates(dates: string[]): Promise<ServiceVisitRow[]> {
+  if (dates.length === 0) return [];
+  const { rows } = await getPool().query<ServiceVisitRow>(
+    `select signup_id, service_date::text, completed_at
+     from service_visits
+     where service_date = any($1::date[])`,
+    [dates]
+  );
+  return rows;
+}
+
+/** Idempotent: tapping Done twice for the same customer/day returns the original completed_at. */
+export async function markVisitDone(signupId: string, date: string): Promise<ServiceVisitRow> {
+  const { rows } = await getPool().query<ServiceVisitRow>(
+    `insert into service_visits (signup_id, service_date)
+     values ($1, $2)
+     on conflict (signup_id, service_date) do update set signup_id = excluded.signup_id
+     returning signup_id, service_date::text, completed_at`,
+    [signupId, date]
+  );
+  return rows[0];
 }

@@ -17,3 +17,17 @@ create table if not exists signups (
 );
 
 create index if not exists signups_payment_status_idx on signups (payment_status);
+
+alter table signups add column if not exists service_slot integer;
+
+create index if not exists signups_service_slot_idx on signups (service_slot);
+
+create table if not exists service_visits (
+  id uuid primary key default gen_random_uuid(),
+  signup_id uuid not null references signups(id) on delete cascade,
+  service_date date not null,
+  completed_at timestamptz not null default now(),
+  unique (signup_id, service_date)
+);
+
+create index if not exists service_visits_date_idx on service_visits (service_date);
