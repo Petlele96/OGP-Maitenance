@@ -31,3 +31,16 @@ create table if not exists service_visits (
 );
 
 create index if not exists service_visits_date_idx on service_visits (service_date);
+
+alter table signups add column if not exists cancelled_at timestamptz;
+
+create table if not exists payments (
+  id uuid primary key default gen_random_uuid(),
+  signup_id uuid not null references signups(id) on delete cascade,
+  amount numeric(10, 2) not null,
+  pf_payment_id text unique,
+  received_at timestamptz not null default now()
+);
+
+create index if not exists payments_signup_id_idx on payments (signup_id);
+create index if not exists payments_received_at_idx on payments (received_at);

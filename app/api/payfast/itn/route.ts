@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyItn } from "@/lib/payfast";
-import { getSignupByMPaymentId, activateSignup, markSignupFailed } from "@/lib/db";
+import { getSignupByMPaymentId, activateSignup, markSignupFailed, cancelSignup, recordPayment } from "@/lib/db";
 import { PLANS, isPlanId } from "@/lib/plans";
 
 export const runtime = "nodejs";
@@ -41,7 +41,17 @@ export async function POST(req: NextRequest) {
   const paymentStatus = result.data.payment_status;
   if (paymentStatus === "COMPLETE") {
     await activateSignup(signup.id, result.data.token ?? null);
-  } else if (paymentStatus === "FAILED" || paymentStatus === "CANCELLED") {
+    const amount = Number.parseFloat(result.data.amount_gross ?? "");
+    if (Number.isFinite(amount)) {
+      await recordPayment(signup.id, amount, result.data.pf_payment_id ?? null);
+    }
+  } else if (signup.payment_status === "active") {
+    // Any non-COMPLETE ITN against an already-active subscription means it stopped
+    // renewing (explicit cancellation or a failed recurring charge) - PayFast's docs
+    // don't specify the exact payment_status string for cancellation, so this is a
+    // deliberately broad catch-all rather than matching a specific value.
+    await cancelSignup(signup.id);
+  } else {
     await markSignupFailed(signup.id);
   }
 

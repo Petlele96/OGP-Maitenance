@@ -1,7 +1,7 @@
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import type { PlanId } from "./plans";
-import { SLOT_COUNT } from "./schedule";
+import { SLOT_COUNT, toDateKey, visitDaysForSlot } from "./schedule";
 
 let pool: Pool | null = null;
 
@@ -31,6 +31,7 @@ export interface SignupRow {
   payfast_subscription_token: string | null;
   payfast_m_payment_id: string;
   service_slot: number;
+  cancelled_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -99,6 +100,26 @@ export async function markSignupFailed(id: string): Promise<void> {
   );
 }
 
+/** Only affects rows still 'active' - a no-op if already cancelled/failed. */
+export async function cancelSignup(id: string): Promise<void> {
+  await getPool().query(
+    `update signups
+     set payment_status = 'cancelled', cancelled_at = now(), updated_at = now()
+     where id = $1 and payment_status = 'active'`,
+    [id]
+  );
+}
+
+/** Idempotent via pf_payment_id's unique constraint - safe if PayFast retries an ITN. */
+export async function recordPayment(signupId: string, amount: number, pfPaymentId: string | null): Promise<void> {
+  await getPool().query(
+    `insert into payments (signup_id, amount, pf_payment_id)
+     values ($1, $2, $3)
+     on conflict (pf_payment_id) do nothing`,
+    [signupId, amount, pfPaymentId]
+  );
+}
+
 export interface ServiceVisitRow {
   signup_id: string;
   service_date: string;
@@ -138,4 +159,132 @@ export async function markVisitDone(signupId: string, date: string): Promise<Ser
     [signupId, date]
   );
   return rows[0];
+}
+
+export async function getActiveCustomerCounts(): Promise<{ monthly: number; annual: number }> {
+  const { rows } = await getPool().query<{ plan: PlanId; count: string }>(
+    "select plan, count(*) from signups where payment_status = 'active' group by plan"
+  );
+  const counts = { monthly: 0, annual: 0 };
+  for (const row of rows) counts[row.plan] = Number(row.count);
+  return counts;
+}
+
+export async function getRevenueThisMonth(): Promise<number> {
+  const { rows } = await getPool().query<{ total: string }>(
+    `select coalesce(sum(amount), 0) as total
+     from payments
+     where received_at >= date_trunc('month', current_date)
+       and received_at < date_trunc('month', current_date) + interval '1 month'`
+  );
+  return Number(rows[0].total);
+}
+
+export async function getCancellationsThisMonth(): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*) from signups
+     where payment_status = 'cancelled'
+       and cancelled_at >= date_trunc('month', current_date)
+       and cancelled_at < date_trunc('month', current_date) + interval '1 month'`
+  );
+  return Number(rows[0].count);
+}
+
+export interface FailedOrOverdueCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  daysLate: number;
+  status: "failed" | "overdue";
+}
+
+/**
+ * Two groups: signups whose *first* payment never went through (still 'pending' ->
+ * 'failed'), and active signups whose last payment is older than one billing period
+ * (no grace period) - "last payment" falls back to start_date/created_at if a signup
+ * predates the payments table.
+ */
+export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCustomer[]> {
+  const pool = getPool();
+  const now = Date.now();
+  const msPerDay = 24 * 60 * 60 * 1000;
+
+  const { rows: failedRows } = await pool.query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    created_at: string;
+  }>("select id, full_name, house_number, whatsapp_number, created_at from signups where payment_status = 'failed'");
+
+  const failed: FailedOrOverdueCustomer[] = failedRows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    daysLate: Math.max(0, Math.floor((now - new Date(r.created_at).getTime()) / msPerDay)),
+    status: "failed",
+  }));
+
+  const { rows: activeRows } = await pool.query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    plan: PlanId;
+    last_payment_at: string;
+  }>(
+    `select s.id, s.full_name, s.house_number, s.whatsapp_number, s.plan,
+            coalesce(max(p.received_at), s.start_date::timestamptz, s.created_at) as last_payment_at
+     from signups s
+     left join payments p on p.signup_id = s.id
+     where s.payment_status = 'active'
+     group by s.id`
+  );
+
+  const overdue: FailedOrOverdueCustomer[] = [];
+  for (const r of activeRows) {
+    const nextDue = new Date(r.last_payment_at);
+    if (r.plan === "annual") nextDue.setFullYear(nextDue.getFullYear() + 1);
+    else nextDue.setMonth(nextDue.getMonth() + 1);
+
+    if (now > nextDue.getTime()) {
+      overdue.push({
+        id: r.id,
+        fullName: r.full_name,
+        houseNumber: r.house_number,
+        whatsappNumber: r.whatsapp_number,
+        daysLate: Math.floor((now - nextDue.getTime()) / msPerDay),
+        status: "overdue",
+      });
+    }
+  }
+
+  return [...failed, ...overdue];
+}
+
+/** Visits due-so-far this month (not the whole month) vs. actually completed. */
+export async function getCompletionRateThisMonth(): Promise<{ done: number; scheduled: number }> {
+  const today = new Date();
+  const todayDay = today.getDate();
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  const { rows: slotRows } = await getPool().query<{ service_slot: number }>(
+    "select service_slot from signups where payment_status = 'active'"
+  );
+
+  let scheduled = 0;
+  for (const { service_slot } of slotRows) {
+    for (const day of visitDaysForSlot(service_slot)) {
+      if (day <= todayDay) scheduled += 1;
+    }
+  }
+
+  const { rows: doneRows } = await getPool().query<{ count: string }>(
+    "select count(*) from service_visits where service_date >= $1",
+    [toDateKey(monthStart)]
+  );
+
+  return { done: Number(doneRows[0].count), scheduled };
 }
