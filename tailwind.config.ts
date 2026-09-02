@@ -5,6 +5,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // Used by /ops and /owner (internal tools) - untouched by the signup page redesign.
         brand: {
           50: "#eefdf3",
           100: "#d6fae1",
@@ -14,6 +15,10 @@ const config: Config = {
           700: "#146a3c",
           900: "#0e3f24",
         },
+        // OGP customer-facing brand palette (signup page only).
+        navy: "#123B6D",
+        skyblue: "#1B8DD1",
+        cta: "#F07A22",
       },
     },
   },
