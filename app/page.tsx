@@ -10,7 +10,6 @@ import {
   ASK_QUESTION_LINK,
   COMPANY_NAME,
   COMPANY_REG,
-  COMPANY_CSD,
   LAUNCH_OFFER_SPOTS,
 } from "@/lib/site";
 
@@ -103,33 +102,22 @@ export default function SignupPage() {
 
   return (
     <main className="mx-auto max-w-lg bg-white px-6 text-navy">
-      {/* 1. Logo + headline */}
+      {/* 1. Logo + hero */}
       <header className="pb-24 pt-14">
         <Image src="/logo.png" alt="OGP Services" width={320} height={320} priority className="h-28 w-auto" />
         <h1 className="mt-10 text-[56px] font-black leading-[1.02] tracking-tight text-navy sm:text-[64px]">
-          Your yard, kept tidy, all year round.
+          Come home to a clean yard.
         </h1>
+        <p className="mt-6 text-[17px] leading-relaxed text-navy/70">
+          R200 a month. Twice a month we cut, clean and clear your whole yard — front and back.
+        </p>
+        <a href="#signup-form" className={`${CTA_BUTTON_CLASS} mt-8`}>
+          Sign up now
+        </a>
+        <p className="mt-4 text-sm text-navy/50">Run from Platinum Village.</p>
       </header>
 
-      {/* 2. Intro */}
-      <section className="border-t border-navy/10 py-24">
-        <p className="text-[17px] leading-relaxed text-navy">
-          Most people here work shifts. You don&apos;t have time for your yard. We do it for you, on a set day,
-          every month.
-        </p>
-      </section>
-
-      {/* 3. Run from Platinum Village */}
-      <section className="border-t border-navy/10 py-24">
-        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Run from Platinum Village</h2>
-        <p className="mt-6 text-[17px] leading-relaxed text-navy">
-          This service is run by a resident of Platinum Village.
-          <br />
-          Not an outside company.
-        </p>
-      </section>
-
-      {/* 4. What R200 covers */}
+      {/* 2. What R200 covers */}
       <section className="border-t border-navy/10 py-24">
         <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">What R200 covers</h2>
         <ul className="mt-6 space-y-3">
@@ -144,7 +132,7 @@ export default function SignupPage() {
         </p>
       </section>
 
-      {/* 5. How often */}
+      {/* 3. How often */}
       <section className="border-t border-navy/10 py-24">
         <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">How often</h2>
         <p className="mt-6 text-[17px] leading-relaxed text-navy">
@@ -155,7 +143,7 @@ export default function SignupPage() {
         <p className="mt-4 text-sm leading-relaxed text-navy/60">Grass grows slowly in winter. That&apos;s why.</p>
       </section>
 
-      {/* 6. How it works */}
+      {/* 4. How it works */}
       <section className="border-t border-navy/10 py-24">
         <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">How it works</h2>
         <ol className="mt-6 flex flex-col gap-4">
@@ -168,7 +156,7 @@ export default function SignupPage() {
         </ol>
       </section>
 
-      {/* 7. Our workers */}
+      {/* 5. Our workers */}
       <section className="border-t border-navy/10 py-24">
         <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Our workers</h2>
         <ul className="mt-6 space-y-3">
@@ -186,19 +174,19 @@ export default function SignupPage() {
         </a>
       </div>
 
-      {/* 8. Credibility - quiet, understated */}
+      {/* 6. Credibility - quiet, understated */}
       <section className="border-t border-navy/10 py-24">
         <div className="border border-navy/15 px-5 py-4">
           <p className="text-xs font-medium text-navy">
-            {COMPANY_NAME} &middot; Reg. {COMPANY_REG} &middot; CSD {COMPANY_CSD}
+            {COMPANY_NAME} &middot; Reg. {COMPANY_REG}
           </p>
           <p className="mt-2 text-xs leading-relaxed text-navy/60">
-            We do grounds and maintenance work for Sibanye-Stillwater K6 Shaft and Royal Bafokeng Administration.
+            We do grounds and maintenance work for Sibanye-Stillwater and Royal Bafokeng Administration.
           </p>
         </div>
       </section>
 
-      {/* 9. Price - the hero */}
+      {/* 7. Price */}
       <section className="border-t border-navy/10 py-24">
         <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Price</h2>
         <div className="mt-6 flex items-baseline gap-2">
@@ -232,7 +220,7 @@ export default function SignupPage() {
         </a>
       </div>
 
-      {/* 10. Launch offer */}
+      {/* 8. Launch offer */}
       <section className="border-t border-navy/10 py-24">
         <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Launch offer</h2>
         <p className="mt-6 text-[17px] leading-relaxed text-navy">
@@ -247,7 +235,7 @@ export default function SignupPage() {
         </p>
       </section>
 
-      {/* 11. Signup form */}
+      {/* 9. Signup form */}
       <section id="signup-form" className="border-t border-navy/10 py-24">
         <form onSubmit={handleSubmit} className="flex flex-col gap-10" noValidate>
           <fieldset>
@@ -397,8 +385,8 @@ export default function SignupPage() {
             </button>
             <p className="mt-4 text-xs leading-relaxed text-navy/50">
               {PLANS[plan].recurring
-                ? "You'll be redirected to PayFast to set up secure recurring billing. Cancel anytime."
-                : "You'll be redirected to PayFast to pay securely for your visit."}
+                ? "We'll take you to PayFast to set up your monthly payment. Cancel anytime."
+                : "We'll take you to PayFast to pay safely for your visit."}
             </p>
           </div>
         </form>
@@ -407,7 +395,7 @@ export default function SignupPage() {
         <form ref={formRef} method="POST" className="hidden" />
       </section>
 
-      {/* 12. Footer */}
+      {/* 10. Footer */}
       <footer className="border-t border-navy/10 py-24">
         <p className="text-sm text-navy/60">
           WhatsApp{" "}
