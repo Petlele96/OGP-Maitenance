@@ -63,8 +63,8 @@ public URL - see below.
    - `PAYFAST_MERCHANT_KEY`
    - `PAYFAST_PASSPHRASE`
    - `PAYFAST_MODE` (`sandbox` until you're ready to go live)
-   - `NEXT_PUBLIC_BASE_URL` (your Vercel deployment URL, e.g.
-     `https://ogp-services.vercel.app`)
+   - `NEXT_PUBLIC_BASE_URL` (the production domain, e.g.
+     `https://yards.ogpservices.co.za`)
    - `OPERATIONS_PASSWORD` (the shared password for `/ops`)
 4. Deploy. Then run the migration against the production database once (pull the real
    connection string from Vercel first, e.g. via `vercel env pull`):
