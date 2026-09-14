@@ -182,7 +182,7 @@ export default function TermsPage() {
       <Section number="9" title="Our workers">
         <List
           items={[
-            "Every worker is known to us, has a verified ID, and works in OGP Services clothing",
+            "Every worker carries an OGP Services staff ID card and wears OGP Services uniform",
             "Workers stay in the yard area only. They do not enter your house",
             "Workers do not ask customers for money, food or favours",
             "If a worker behaves badly, tell us on WhatsApp immediately",
