@@ -106,7 +106,8 @@ export default function SignupPage() {
       {/* 1. Logo + hero */}
       <header className="pb-24 pt-14">
         <Image src="/logo.png" alt="OGP Services" width={320} height={320} priority className="h-28 w-auto" />
-        <h1 className="mt-10 text-[56px] font-black leading-[1.02] tracking-tight text-navy sm:text-[64px]">
+        <p className="mt-10 text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Platinum Village</p>
+        <h1 className="mt-3 text-[56px] font-black leading-[1.02] tracking-tight text-navy sm:text-[64px]">
           Come home to a clean yard.
         </h1>
         <p className="mt-6 text-[17px] leading-relaxed text-navy/70">
@@ -116,7 +117,7 @@ export default function SignupPage() {
           Sign up now
         </a>
         <p className="mt-4 text-sm text-navy/50">Cancel any time. No contract.</p>
-        <p className="mt-1 text-sm text-navy/50">Run from Platinum Village.</p>
+        <p className="mt-1 text-sm text-navy/50">Run by a Platinum Village resident. OGP Services (Pty) Ltd.</p>
       </header>
 
       {/* 2. What R200 covers */}
