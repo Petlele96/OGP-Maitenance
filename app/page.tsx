@@ -113,6 +113,13 @@ export default function SignupPage() {
         <p className="mt-6 text-[17px] leading-relaxed text-navy/70">
           R200 a month. Twice a month we cut, clean and clear your whole yard — front and back.
         </p>
+        <Image
+          src="/hero-house.webp"
+          alt="A Platinum Village home with a clean, well-kept yard"
+          width={1044}
+          height={966}
+          className="mt-8 h-auto w-full rounded-lg"
+        />
         <a href="#signup-form" className={`${CTA_BUTTON_CLASS} mt-8`}>
           Sign up now
         </a>
