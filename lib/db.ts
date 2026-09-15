@@ -3,14 +3,27 @@ import { randomUUID } from "node:crypto";
 import { type PlanId, isSubscriberPlan } from "./plans";
 import {
   toDateKey,
-  visitDaysForSlot,
+  visitDaysForSlotInMonth,
   candidateSlotForDate,
   eligibleSlotsForNewSignup,
   addWorkingDays,
   nextWorkingDay,
+  nowInJohannesburg,
   MIN_NOTICE_WORKING_DAYS,
   type SkipReason,
 } from "./schedule";
+
+/**
+ * SQL for "midnight on the 1st of the current month, Johannesburg time" as an explicit
+ * timestamptz. Written as a double AT TIME ZONE conversion (naive-local -> instant)
+ * rather than relying on the session's timezone setting, because PgBouncer's
+ * transaction-pooling mode (what DATABASE_URL/POSTGRES_URL point at in production)
+ * doesn't reliably preserve a `SET timezone` across pooled connections - see the
+ * `pool.on("connect", ...)` note below, which covers current_date/now() elsewhere but
+ * can't be trusted for these boundary comparisons.
+ */
+const SAST_MONTH_START_SQL =
+  "(date_trunc('month', now() at time zone 'Africa/Johannesburg') at time zone 'Africa/Johannesburg')";
 
 let pool: Pool | null = null;
 
@@ -25,6 +38,12 @@ function getPool(): Pool {
   // TLS-encrypted, just without full chain verification.
   const connectionString = url.replace(/([?&])sslmode=[^&]*/, "$1sslmode=no-verify");
   pool = new Pool({ connectionString, max: 1, ssl: { rejectUnauthorized: false } });
+  // Belt-and-suspenders alongside `alter database ... set timezone` in schema.sql - makes
+  // every connection explicitly Africa/Johannesburg regardless of what the pooler hands
+  // back, so current_date/now() never silently drift onto UTC's calendar day.
+  pool.on("connect", (client) => {
+    client.query("set timezone = 'Africa/Johannesburg'").catch(() => {});
+  });
   return pool;
 }
 
@@ -69,6 +88,24 @@ async function pickLeastLoadedSlot(eligibleSlots: number[]): Promise<number> {
   return rows[0].slot;
 }
 
+/**
+ * True if this WhatsApp number already has an active monthly or annual subscription.
+ * Scoped to subscriptions (not once-off) deliberately - a subscriber booking an extra
+ * once-off job, or a past once-off customer booking another one, is normal repeat
+ * business, not an accidental double-signup. Preventing two parallel *subscriptions* on
+ * the same number is what actually avoids double-billing the same household.
+ */
+export async function hasActiveSubscription(whatsappNumber: string): Promise<boolean> {
+  const { rows } = await getPool().query<{ exists: boolean }>(
+    `select exists(
+       select 1 from signups
+       where whatsapp_number = $1 and payment_status = 'active' and plan in ('monthly', 'annual')
+     ) as exists`,
+    [whatsappNumber]
+  );
+  return rows[0].exists;
+}
+
 export async function createSignup(input: {
   fullName: string;
   houseNumber: string;
@@ -81,7 +118,7 @@ export async function createSignup(input: {
   // Once-off bookings don't recur, so there's no bi-monthly slot to assign - they get a
   // scheduled_visit_date instead, set once payment completes (see bookOnceOffVisit).
   const slot = isSubscriberPlan(input.plan)
-    ? await pickLeastLoadedSlot(eligibleSlotsForNewSignup(new Date()))
+    ? await pickLeastLoadedSlot(eligibleSlotsForNewSignup(nowInJohannesburg()))
     : null;
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls createSignup after the zod schema has confirmed agreedToTerms === true.
@@ -111,7 +148,7 @@ export async function activateSignup(id: string, subscriptionToken: string | nul
   await getPool().query(
     `update signups
      set payment_status = 'active',
-         start_date = coalesce(start_date, current_date),
+         start_date = coalesce(start_date, (now() at time zone 'Africa/Johannesburg')::date),
          payfast_subscription_token = coalesce($2, payfast_subscription_token),
          last_payment_failed_at = null,
          updated_at = now()
@@ -158,7 +195,7 @@ export async function cancelSignup(id: string): Promise<void> {
  * (won't move an already-booked date on a retried ITN).
  */
 export async function bookOnceOffVisit(id: string): Promise<void> {
-  const firstVisitDate = toDateKey(addWorkingDays(new Date(), MIN_NOTICE_WORKING_DAYS));
+  const firstVisitDate = toDateKey(addWorkingDays(nowInJohannesburg(), MIN_NOTICE_WORKING_DAYS));
   await getPool().query(
     `update signups
      set scheduled_visit_date = coalesce(scheduled_visit_date, $2::date),
@@ -262,8 +299,8 @@ export interface SkippedVisitRow {
  * creating a duplicate.
  */
 export async function recordSkippedVisit(signupId: string, reason: SkipReason): Promise<SkippedVisitRow> {
-  const originalDate = toDateKey(new Date());
-  const rescheduledDate = toDateKey(nextWorkingDay(new Date()));
+  const originalDate = toDateKey(nowInJohannesburg());
+  const rescheduledDate = toDateKey(nextWorkingDay(nowInJohannesburg()));
   const { rows } = await getPool().query<SkippedVisitRow>(
     `insert into skipped_visits (signup_id, original_date, reason, rescheduled_date)
      values ($1, $2::date, $3, $4::date)
@@ -305,8 +342,8 @@ export async function getSkippedVisitsThisMonth(): Promise<SkippedVisitWithCusto
     `select sv.id, s.full_name, s.house_number, sv.reason, sv.original_date::text, sv.rescheduled_date::text
      from skipped_visits sv
      join signups s on s.id = sv.signup_id
-     where sv.created_at >= date_trunc('month', current_date)
-       and sv.created_at < date_trunc('month', current_date) + interval '1 month'
+     where sv.created_at >= ${SAST_MONTH_START_SQL}
+       and sv.created_at < ${SAST_MONTH_START_SQL} + interval '1 month'
      order by sv.created_at desc`
   );
   return rows.map((r) => ({
@@ -335,8 +372,8 @@ export async function getOnceOffJobsThisMonth(): Promise<number> {
      from signups s
      join payments p on p.signup_id = s.id
      where s.plan = 'once-off'
-       and p.received_at >= date_trunc('month', current_date)
-       and p.received_at < date_trunc('month', current_date) + interval '1 month'`
+       and p.received_at >= ${SAST_MONTH_START_SQL}
+       and p.received_at < ${SAST_MONTH_START_SQL} + interval '1 month'`
   );
   return Number(rows[0].count);
 }
@@ -348,8 +385,8 @@ export async function getRevenueThisMonth(): Promise<{ subscriber: number; onceO
        coalesce(sum(p.amount) filter (where s.plan = 'once-off'), 0) as once_off
      from payments p
      join signups s on s.id = p.signup_id
-     where p.received_at >= date_trunc('month', current_date)
-       and p.received_at < date_trunc('month', current_date) + interval '1 month'`
+     where p.received_at >= ${SAST_MONTH_START_SQL}
+       and p.received_at < ${SAST_MONTH_START_SQL} + interval '1 month'`
   );
   const subscriber = Number(rows[0].subscriber);
   const onceOff = Number(rows[0].once_off);
@@ -360,8 +397,8 @@ export async function getCancellationsThisMonth(): Promise<number> {
   const { rows } = await getPool().query<{ count: string }>(
     `select count(*) from signups
      where payment_status = 'cancelled'
-       and cancelled_at >= date_trunc('month', current_date)
-       and cancelled_at < date_trunc('month', current_date) + interval '1 month'`
+       and cancelled_at >= ${SAST_MONTH_START_SQL}
+       and cancelled_at < ${SAST_MONTH_START_SQL} + interval '1 month'`
   );
   return Number(rows[0].count);
 }
@@ -452,7 +489,7 @@ export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCust
 
 /** Visits due-so-far this month (not the whole month) vs. actually completed. */
 export async function getCompletionRateThisMonth(): Promise<{ done: number; scheduled: number }> {
-  const today = new Date();
+  const today = nowInJohannesburg();
   const todayDay = today.getDate();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
@@ -464,7 +501,7 @@ export async function getCompletionRateThisMonth(): Promise<{ done: number; sche
 
   let scheduled = 0;
   for (const { service_slot } of slotRows) {
-    for (const day of visitDaysForSlot(service_slot)) {
+    for (const day of visitDaysForSlotInMonth(service_slot, today)) {
       if (day <= todayDay) scheduled += 1;
     }
   }

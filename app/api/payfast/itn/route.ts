@@ -46,6 +46,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid notification", reasons: result.reasons }, { status: 400 });
   }
 
+  // PayFast's ITN payment_status is always one of exactly these four values (confirmed
+  // against PayFast's own official WooCommerce gateway plugin, which switches on
+  // lowercased 'complete' | 'failed' | 'pending' | 'cancelled' - there is no fifth value
+  // and no separate notification channel for subscription cancellation).
   const paymentStatus = result.data.payment_status;
   if (paymentStatus === "COMPLETE") {
     const isFirstActivation = signup.start_date === null;
@@ -66,15 +70,24 @@ export async function POST(req: NextRequest) {
     } else {
       await markSignupFailed(signup.id);
     }
-  } else if (signup.payment_status === "active") {
-    // Anything else (explicit CANCELLED, or an unrecognised status) against an
-    // already-active subscription is treated as a real cancellation - it comes off
-    // the schedule. PayFast's docs don't specify the exact payment_status string for
-    // an explicit cancellation, so this is a deliberate catch-all for "not COMPLETE,
-    // not a known FAILED charge" rather than matching one specific value.
+  } else if (paymentStatus === "PENDING") {
+    // Still processing (e.g. a slow EFT leg) - not a failure and not a cancellation.
+    // Leave the signup exactly as it is; PayFast will follow up with a COMPLETE or
+    // FAILED notification once it resolves. Just acknowledge so PayFast doesn't retry.
+  } else if (paymentStatus === "CANCELLED" && signup.payment_status === "active") {
+    // The only status that ends an active subscription - sent when the subscription is
+    // cancelled on PayFast's side (by the customer or the merchant).
     await cancelSignup(signup.id);
-  } else {
+  } else if (signup.payment_status !== "active") {
     await markSignupFailed(signup.id);
+  } else {
+    // An unrecognised payment_status against an active subscription - log it rather
+    // than guess. Never cancel or fail a paying customer based on a status we don't
+    // recognise.
+    console.error("PayFast ITN: unrecognised payment_status, no action taken", {
+      signupId: signup.id,
+      paymentStatus,
+    });
   }
 
   return new NextResponse("OK", { status: 200 });

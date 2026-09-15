@@ -1,5 +1,11 @@
 create extension if not exists pgcrypto;
 
+-- The business operates in Johannesburg - without this, current_date/now()-based date
+-- math (slot scheduling, "this month" revenue/completion/cancellation queries) runs on
+-- the server's UTC default, which silently disagrees with the local calendar day for a
+-- ~2 hour window every night (South Africa has no DST, so the offset is always +2).
+alter database postgres set timezone to 'Africa/Johannesburg';
+
 create table if not exists signups (
   id uuid primary key default gen_random_uuid(),
   full_name text not null,
@@ -78,3 +84,25 @@ create table if not exists skipped_visits (
 
 create index if not exists skipped_visits_signup_id_idx on skipped_visits (signup_id);
 create index if not exists skipped_visits_created_at_idx on skipped_visits (created_at);
+
+-- This app never talks to Supabase's PostgREST API - it connects directly as the table
+-- owner (which always bypasses RLS, so none of this affects the app itself). These
+-- tables hold full customer PII and payment records, so RLS is enabled with zero
+-- policies granted to anon/authenticated: the public Supabase anon key that Vercel's
+-- storage integration provisions is then unable to read or write a single row here.
+alter table signups enable row level security;
+alter table payments enable row level security;
+alter table service_visits enable row level security;
+alter table skipped_visits enable row level security;
+
+drop policy if exists "deny_anonymous_access" on signups;
+create policy "deny_anonymous_access" on signups for all to anon, authenticated using (false);
+
+drop policy if exists "deny_anonymous_access" on payments;
+create policy "deny_anonymous_access" on payments for all to anon, authenticated using (false);
+
+drop policy if exists "deny_anonymous_access" on service_visits;
+create policy "deny_anonymous_access" on service_visits for all to anon, authenticated using (false);
+
+drop policy if exists "deny_anonymous_access" on skipped_visits;
+create policy "deny_anonymous_access" on skipped_visits for all to anon, authenticated using (false);

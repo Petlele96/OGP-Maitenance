@@ -10,7 +10,7 @@ import {
   getUnwelcomedCustomers,
   getSkippedVisitsThisMonth,
 } from "@/lib/db";
-import { nextServiceDate } from "@/lib/schedule";
+import { nextServiceDate, nowInJohannesburg } from "@/lib/schedule";
 
 export const runtime = "nodejs";
 
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
     getSkippedVisitsThisMonth(),
   ]);
 
-  const now = new Date();
+  const now = nowInJohannesburg();
   const unwelcomed = unwelcomedCustomers.map((c) => ({
     id: c.id,
     fullName: c.fullName,

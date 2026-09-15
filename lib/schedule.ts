@@ -1,25 +1,62 @@
 /**
- * Two visits a month per customer, ~14 days apart, on a fixed day-of-month.
- * 14 slots (1-14); slot N means "visited on day N and day N+14" every month.
- * Deliberately caps at day 28 so every month (even February) behaves the same -
- * the last day or few of longer months are always free.
+ * Two visits a month per customer, ~14 days apart, on a fixed day-of-month, September
+ * through April. May through August (winter - grass grows slowly), that drops to one
+ * visit, on the slot's first day only.
+ * 14 slots (1-14); slot N means "visited on day N and day N+14" every summer month, or
+ * "day N only" every winter month. Deliberately caps at day 28 so every month (even
+ * February) behaves the same - the last day or few of longer months are always free.
  */
 export const SLOT_COUNT = 14;
+
+/**
+ * "Now", but with getDate()/getMonth()/getDay()/getFullYear() always reading as
+ * Johannesburg wall-clock time, regardless of what timezone the Node process actually
+ * runs in - Vercel's runtime defaults to UTC and `TZ` is a reserved env var name Vercel
+ * won't let us set, so every "what day is it" call in this app goes through this instead
+ * of a bare `new Date()`. Uses Intl's real IANA timezone data (not a hardcoded +2), so it
+ * would stay correct even if South Africa ever adopted DST.
+ *
+ * The returned Date is NOT a real instant - its epoch/UTC value is meaningless. Only its
+ * local-time getters are valid to read (which is all this app's scheduling code ever
+ * does with "today").
+ */
+export function nowInJohannesburg(): Date {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Africa/Johannesburg",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const get = (type: string): number => Number(parts.find((p) => p.type === type)?.value);
+  return new Date(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+}
+
+/** May (4) through August (7), 0-indexed - the once-a-month season. */
+export function isWinterMonth(monthIndex0: number): boolean {
+  return monthIndex0 >= 4 && monthIndex0 <= 7;
+}
 
 export function isValidSlot(slot: number): boolean {
   return Number.isInteger(slot) && slot >= 1 && slot <= SLOT_COUNT;
 }
 
-/** The slot that would be serviced on this date, or null if nobody is scheduled (days 29-31). */
+/** The slot that would be serviced on this date, or null if nobody is scheduled. */
 export function candidateSlotForDate(date: Date): number | null {
   const day = date.getDate();
-  const slot = day <= SLOT_COUNT ? day : day - SLOT_COUNT;
+  if (day <= SLOT_COUNT) return isValidSlot(day) ? day : null;
+  // day 15-28 is a slot's *second* visit of the month - which only exists Sep-Apr.
+  if (isWinterMonth(date.getMonth())) return null;
+  const slot = day - SLOT_COUNT;
   return isValidSlot(slot) ? slot : null;
 }
 
-/** The two days-of-month a given slot is visited on. */
-export function visitDaysForSlot(slot: number): [number, number] {
-  return [slot, slot + SLOT_COUNT];
+/** The day(s)-of-month `slot` is visited on, for the month `date` falls in - one day in winter, two otherwise. */
+export function visitDaysForSlotInMonth(slot: number, date: Date): number[] {
+  return isWinterMonth(date.getMonth()) ? [slot] : [slot, slot + SLOT_COUNT];
 }
 
 /** Minimum notice OGP commits to before a customer's first visit. */
@@ -48,18 +85,20 @@ export function nextWorkingDay(date: Date): Date {
 
 /**
  * The next calendar date (strictly after `from`) that `slot` is visited on - i.e. the
- * sooner of this month's two visit days that hasn't happened yet, or next month's first
- * one if both have already passed.
+ * soonest of this month's visit day(s) that hasn't happened yet (one in winter, two
+ * otherwise), or next month's first one if all of this month's have already passed.
  */
 export function nextOccurrenceForSlot(slot: number, from: Date): Date {
-  const [dayA, dayB] = visitDaysForSlot(slot);
   const year = from.getFullYear();
   const month = from.getMonth();
   const todayDay = from.getDate();
 
-  const upcomingThisMonth = [dayA, dayB].filter((d) => d > todayDay).sort((a, b) => a - b);
+  const upcomingThisMonth = visitDaysForSlotInMonth(slot, from)
+    .filter((d) => d > todayDay)
+    .sort((a, b) => a - b);
   if (upcomingThisMonth.length > 0) return new Date(year, month, upcomingThisMonth[0]);
-  return new Date(year, month + 1, dayA);
+  // Next month's first visit day is always `slot` itself, regardless of season.
+  return new Date(year, month + 1, slot);
 }
 
 /**

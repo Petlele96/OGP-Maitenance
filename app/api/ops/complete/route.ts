@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/ops-auth";
-import { toDateKey } from "@/lib/schedule";
+import { toDateKey, nowInJohannesburg } from "@/lib/schedule";
 import { markVisitDone } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -21,6 +21,6 @@ export async function POST(req: NextRequest) {
   const parsed = completeSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "Missing signupId" }, { status: 400 });
 
-  const visit = await markVisitDone(parsed.data.signupId, toDateKey(new Date()));
+  const visit = await markVisitDone(parsed.data.signupId, toDateKey(nowInJohannesburg()));
   return NextResponse.json({ completedAt: visit.completed_at });
 }

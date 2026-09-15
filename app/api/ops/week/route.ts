@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { candidateSlotForDate, getWeekDates, toDateKey } from "@/lib/schedule";
+import { candidateSlotForDate, getWeekDates, toDateKey, nowInJohannesburg } from "@/lib/schedule";
 import { isAuthorized } from "@/lib/ops-auth";
 import { getActiveVisitsForDates, getVisitsForDates } from "@/lib/db";
 import { compareHouseNumbers } from "@/lib/sort";
@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const weekDates = getWeekDates(new Date());
+  const weekDates = getWeekDates(nowInJohannesburg());
   const dateKeys = weekDates.map(toDateKey);
   const slotByDate = new Map(dateKeys.map((key, i) => [key, candidateSlotForDate(weekDates[i])]));
 

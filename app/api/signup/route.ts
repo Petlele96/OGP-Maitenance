@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSignup } from "@/lib/db";
-import { PLANS } from "@/lib/plans";
+import { createSignup, hasActiveSubscription } from "@/lib/db";
+import { PLANS, isSubscriberPlan } from "@/lib/plans";
 import { buildCheckoutFields } from "@/lib/payfast";
 import { signupSchema, normalizeCellNumber } from "@/lib/validation";
 
@@ -31,6 +31,16 @@ export async function POST(req: NextRequest) {
   const { fullName, houseNumber, plan: planId } = parsed.data;
   const whatsappNumber = normalizeCellNumber(parsed.data.whatsappNumber);
   const plan = PLANS[planId];
+
+  if (isSubscriberPlan(planId) && (await hasActiveSubscription(whatsappNumber))) {
+    return NextResponse.json(
+      {
+        error:
+          "This WhatsApp number already has an active plan with us. If you'd like to make a change, message us on WhatsApp and we'll help.",
+      },
+      { status: 409 }
+    );
+  }
 
   const signup = await createSignup({
     fullName,

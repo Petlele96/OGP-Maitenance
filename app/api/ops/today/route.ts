@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/ops-auth";
-import { toDateKey } from "@/lib/schedule";
+import { toDateKey, nowInJohannesburg } from "@/lib/schedule";
 import { getActiveVisitsForDates, getVisitsForDates, getSkipsForDate } from "@/lib/db";
 import { groupByBlock } from "@/lib/sort";
 
@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const dateKey = toDateKey(new Date());
+  const dateKey = toDateKey(nowInJohannesburg());
 
   const signups = await getActiveVisitsForDates([dateKey]);
   const visits = await getVisitsForDates([dateKey]);

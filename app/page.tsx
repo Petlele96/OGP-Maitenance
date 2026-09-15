@@ -104,6 +104,11 @@ export default function SignupPage() {
         <p className="mt-6 text-[17px] leading-relaxed text-navy/70">
           R200 a month. Twice a month we cut, clean and clear your whole yard — front and back.
         </p>
+        <a href="#signup-form" className={`${CTA_BUTTON_CLASS} mt-8`}>
+          Sign up now
+        </a>
+        <p className="mt-4 text-sm text-navy/50">Cancel any time. No contract.</p>
+        <p className="mt-1 text-sm text-navy/50">Run by a Platinum Village resident. OGP Services (Pty) Ltd.</p>
         <Image
           src="/hero-house.webp"
           alt="A Platinum Village home with a clean, well-kept yard"
@@ -111,11 +116,6 @@ export default function SignupPage() {
           height={966}
           className="mt-8 h-auto w-full rounded-lg"
         />
-        <a href="#signup-form" className={`${CTA_BUTTON_CLASS} mt-8`}>
-          Sign up now
-        </a>
-        <p className="mt-4 text-sm text-navy/50">Cancel any time. No contract.</p>
-        <p className="mt-1 text-sm text-navy/50">Run by a Platinum Village resident. OGP Services (Pty) Ltd.</p>
       </header>
 
       {/* 2. What R200 covers */}
