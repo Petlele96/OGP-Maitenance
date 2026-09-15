@@ -1,7 +1,16 @@
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { type PlanId, isSubscriberPlan } from "./plans";
-import { SLOT_COUNT, toDateKey, visitDaysForSlot, candidateSlotForDate } from "./schedule";
+import {
+  toDateKey,
+  visitDaysForSlot,
+  candidateSlotForDate,
+  eligibleSlotsForNewSignup,
+  addWorkingDays,
+  nextWorkingDay,
+  MIN_NOTICE_WORKING_DAYS,
+  type SkipReason,
+} from "./schedule";
 
 let pool: Pool | null = null;
 
@@ -36,20 +45,26 @@ export interface SignupRow {
   terms_accepted_at: string;
   block: number | null;
   scheduled_visit_date: string | null;
+  welcomed_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
-/** The slot with the fewest active customers right now, ties broken by lowest slot number. */
-async function pickLeastLoadedSlot(): Promise<number> {
+/**
+ * The least-loaded slot among `eligibleSlots`, ties broken by lowest slot number.
+ * Restricted to slots that still give at least MIN_NOTICE_WORKING_DAYS of notice (see
+ * eligibleSlotsForNewSignup) - load-balancing only ever chooses among those, so a new
+ * signup's first visit never lands too soon.
+ */
+async function pickLeastLoadedSlot(eligibleSlots: number[]): Promise<number> {
   const { rows } = await getPool().query<{ slot: number; count: string }>(
     `select gs as slot, count(s.id) as count
-     from generate_series(1, $1) as gs
+     from unnest($1::int[]) as gs
      left join signups s on s.service_slot = gs and s.payment_status = 'active'
      group by gs
      order by count(s.id) asc, gs asc
      limit 1`,
-    [SLOT_COUNT]
+    [eligibleSlots]
   );
   return rows[0].slot;
 }
@@ -65,7 +80,9 @@ export async function createSignup(input: {
   const id = randomUUID();
   // Once-off bookings don't recur, so there's no bi-monthly slot to assign - they get a
   // scheduled_visit_date instead, set once payment completes (see bookOnceOffVisit).
-  const slot = isSubscriberPlan(input.plan) ? await pickLeastLoadedSlot() : null;
+  const slot = isSubscriberPlan(input.plan)
+    ? await pickLeastLoadedSlot(eligibleSlotsForNewSignup(new Date()))
+    : null;
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls createSignup after the zod schema has confirmed agreedToTerms === true.
   const { rows } = await getPool().query<SignupRow>(
@@ -133,18 +150,21 @@ export async function cancelSignup(id: string): Promise<void> {
 }
 
 /**
- * Books a once-off visit for tomorrow, once payment completes. No capacity model - it
- * just joins tomorrow's list alongside whoever else is already on it, same as the
+ * Books a once-off visit MIN_NOTICE_WORKING_DAYS out, once payment completes - the same
+ * minimum notice a subscriber's first visit gets, so a once-off customer isn't sprung on
+ * the operator (or the customer) with no warning. No capacity model beyond that - it
+ * just joins that day's list alongside whoever else is already on it, same as the
  * existing recurring scheduler does for any given day. Only sets it the first time
  * (won't move an already-booked date on a retried ITN).
  */
 export async function bookOnceOffVisit(id: string): Promise<void> {
+  const firstVisitDate = toDateKey(addWorkingDays(new Date(), MIN_NOTICE_WORKING_DAYS));
   await getPool().query(
     `update signups
-     set scheduled_visit_date = coalesce(scheduled_visit_date, current_date + interval '1 day'),
+     set scheduled_visit_date = coalesce(scheduled_visit_date, $2::date),
          updated_at = now()
      where id = $1`,
-    [id]
+    [id, firstVisitDate]
   );
 }
 
@@ -167,10 +187,13 @@ export interface ServiceVisitRow {
 /**
  * Active signups due on any of the given dates - subscribers via their recurring
  * service_slot (candidateSlotForDate), once-off bookings via their single
- * scheduled_visit_date. A subscriber row always has scheduled_visit_date null and a
- * once-off row always has service_slot null, so the two conditions never double-match
- * the same row. Unordered - callers sort/group with lib/sort.ts (a plain SQL text order
- * misorders numeric house numbers).
+ * scheduled_visit_date, and anyone bumped onto one of these dates by a "Can't do" skip
+ * (skipped_visits.rescheduled_date). These three never double-match the same row for the
+ * same visit (a subscriber's scheduled_visit_date is always null, a once-off's
+ * service_slot is always null, and a skip's rescheduled_date is a fresh one-off date), so
+ * a customer appears at most once per date even though up to three conditions could
+ * technically be true. Unordered - callers sort/group with lib/sort.ts (a plain SQL text
+ * order misorders numeric house numbers).
  */
 export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRow[]> {
   if (dates.length === 0) return [];
@@ -184,7 +207,14 @@ export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRo
   const { rows } = await getPool().query<SignupRow>(
     `select * from signups
      where payment_status = 'active'
-       and (service_slot = any($1::int[]) or scheduled_visit_date = any($2::date[]))`,
+       and (
+         service_slot = any($1::int[])
+         or scheduled_visit_date = any($2::date[])
+         or exists (
+           select 1 from skipped_visits sv
+           where sv.signup_id = signups.id and sv.rescheduled_date = any($2::date[])
+         )
+       )`,
     [slots, dates]
   );
   return rows;
@@ -212,6 +242,81 @@ export async function markVisitDone(signupId: string, date: string): Promise<Ser
     [signupId, date]
   );
   return rows[0];
+}
+
+export interface SkippedVisitRow {
+  id: string;
+  signup_id: string;
+  original_date: string;
+  reason: SkipReason;
+  rescheduled_date: string;
+  created_at: string;
+}
+
+/**
+ * Records a "Can't do" on today's visit and bumps the customer to the next working day -
+ * a one-off extra date on top of their normal recurring slot (getActiveVisitsForDates
+ * already treats any skipped_visits.rescheduled_date as a due date), so their regular
+ * schedule for future months is untouched. Idempotent per signup/day: tapping "Can't do"
+ * again the same day (e.g. to correct the reason) updates the existing row instead of
+ * creating a duplicate.
+ */
+export async function recordSkippedVisit(signupId: string, reason: SkipReason): Promise<SkippedVisitRow> {
+  const originalDate = toDateKey(new Date());
+  const rescheduledDate = toDateKey(nextWorkingDay(new Date()));
+  const { rows } = await getPool().query<SkippedVisitRow>(
+    `insert into skipped_visits (signup_id, original_date, reason, rescheduled_date)
+     values ($1, $2::date, $3, $4::date)
+     on conflict (signup_id, original_date) do update set reason = excluded.reason
+     returning id, signup_id, original_date::text, reason, rescheduled_date::text, created_at`,
+    [signupId, originalDate, reason, rescheduledDate]
+  );
+  return rows[0];
+}
+
+/** For the ops Today list, to show an already-skipped row as skipped rather than actionable. */
+export async function getSkipsForDate(date: string): Promise<Map<string, { reason: SkipReason; rescheduledDate: string }>> {
+  const { rows } = await getPool().query<{ signup_id: string; reason: SkipReason; rescheduled_date: string }>(
+    "select signup_id, reason, rescheduled_date::text from skipped_visits where original_date = $1",
+    [date]
+  );
+  return new Map(rows.map((r) => [r.signup_id, { reason: r.reason, rescheduledDate: r.rescheduled_date }]));
+}
+
+export interface SkippedVisitWithCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  reason: SkipReason;
+  originalDate: string;
+  rescheduledDate: string;
+}
+
+/** For the owner dashboard's "Missed visits" panel. */
+export async function getSkippedVisitsThisMonth(): Promise<SkippedVisitWithCustomer[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    reason: SkipReason;
+    original_date: string;
+    rescheduled_date: string;
+  }>(
+    `select sv.id, s.full_name, s.house_number, sv.reason, sv.original_date::text, sv.rescheduled_date::text
+     from skipped_visits sv
+     join signups s on s.id = sv.signup_id
+     where sv.created_at >= date_trunc('month', current_date)
+       and sv.created_at < date_trunc('month', current_date) + interval '1 month'
+     order by sv.created_at desc`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    reason: r.reason,
+    originalDate: r.original_date,
+    rescheduledDate: r.rescheduled_date,
+  }));
 }
 
 /** Active subscribers only - once-off bookings don't have an ongoing subscription state. */
@@ -370,5 +475,54 @@ export async function getCompletionRateThisMonth(): Promise<{ done: number; sche
   );
 
   return { done: Number(doneRows[0].count), scheduled };
+}
+
+export interface UnwelcomedCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  plan: PlanId;
+  serviceSlot: number | null;
+  scheduledVisitDate: string | null;
+}
+
+/**
+ * Active signups nobody's sent the WhatsApp welcome message to yet. Returns the raw
+ * schedule fields (service_slot for subscribers, scheduled_visit_date for once-off)
+ * rather than a formatted day - the caller works out "next occurrence" via
+ * lib/schedule.ts, since that's a pure function of "today" and doesn't belong in a query.
+ */
+export async function getUnwelcomedCustomers(): Promise<UnwelcomedCustomer[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    plan: PlanId;
+    service_slot: number | null;
+    scheduled_visit_date: string | null;
+  }>(
+    `select id, full_name, house_number, whatsapp_number, plan, service_slot, scheduled_visit_date::text
+     from signups
+     where payment_status = 'active' and welcomed_at is null
+     order by created_at asc`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    plan: r.plan,
+    serviceSlot: r.service_slot,
+    scheduledVisitDate: r.scheduled_visit_date,
+  }));
+}
+
+export async function markWelcomed(id: string): Promise<void> {
+  await getPool().query(
+    "update signups set welcomed_at = now() where id = $1 and payment_status = 'active'",
+    [id]
+  );
 }
 

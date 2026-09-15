@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { buildWelcomeLink } from "@/lib/site";
+import type { SkipReason } from "@/lib/schedule";
 
 type AuthState = "checking" | "unauthenticated" | "authenticated";
 
@@ -13,6 +15,23 @@ interface FailedOrOverdue {
   status: "failed" | "overdue";
 }
 
+interface UnwelcomedCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  serviceDayLabel: string;
+}
+
+interface SkippedVisit {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  reason: SkipReason;
+  originalDate: string;
+  rescheduledDate: string;
+}
+
 interface DashboardData {
   activeCustomers: { total: number; monthly: number; annual: number };
   onceOffJobsThisMonth: number;
@@ -20,10 +39,28 @@ interface DashboardData {
   failedOrOverdue: FailedOrOverdue[];
   cancellationsThisMonth: number;
   completion: { done: number; scheduled: number };
+  unwelcomedCustomers: UnwelcomedCustomer[];
+  skippedVisits: SkippedVisit[];
 }
 
 function formatRand(amount: number): string {
   return `R${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+const SKIP_REASON_LABELS: Record<SkipReason, string> = {
+  rain: "Rain",
+  gate_locked: "Gate locked",
+  dogs_loose: "Dogs loose",
+  customer_requested: "Customer requested",
+  other: "Other",
+};
+
+function formatShortDate(dateKey: string): string {
+  return new Date(`${dateKey}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 }
 
 export default function OwnerPage() {
@@ -69,6 +106,17 @@ export default function OwnerPage() {
     await fetch("/api/owner/logout", { method: "POST" });
     setAuthState("unauthenticated");
     setData(null);
+  }
+
+  async function handleWelcome(signupId: string) {
+    await fetch("/api/owner/welcome", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signupId }),
+    });
+    setData((prev) =>
+      prev ? { ...prev, unwelcomedCustomers: prev.unwelcomedCustomers.filter((c) => c.id !== signupId) } : prev
+    );
   }
 
   if (authState === "checking") {
@@ -176,6 +224,59 @@ export default function OwnerPage() {
                 </div>
                 <span className="ml-3 shrink-0 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
                   {c.status === "failed" ? "Failed" : `${c.daysLate} day${c.daysLate === 1 ? "" : "s"} overdue`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+        <h2 className="text-sm font-semibold text-brand-900">Welcome new customers</h2>
+        {data.unwelcomedCustomers.length === 0 ? (
+          <p className="mt-3 text-sm text-brand-500">Everyone's been welcomed.</p>
+        ) : (
+          <ul className="mt-3 flex flex-col gap-3">
+            {data.unwelcomedCustomers.map((c) => (
+              <li key={c.id} className="border-t border-brand-50 pt-3 first:border-0 first:pt-0">
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-brand-900">{c.fullName}</p>
+                    <p className="text-sm text-brand-700">House {c.houseNumber}</p>
+                  </div>
+                  <a
+                    href={buildWelcomeLink(c.fullName, c.whatsappNumber, c.serviceDayLabel)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => handleWelcome(c.id)}
+                    className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Welcome
+                  </a>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+        <h2 className="text-sm font-semibold text-brand-900">Missed visits this month</h2>
+        {data.skippedVisits.length === 0 ? (
+          <p className="mt-3 text-sm text-brand-500">None this month.</p>
+        ) : (
+          <ul className="mt-3 flex flex-col gap-3">
+            {data.skippedVisits.map((v) => (
+              <li key={v.id} className="flex items-center justify-between border-t border-brand-50 pt-3 first:border-0 first:pt-0">
+                <div className="min-w-0">
+                  <p className="font-semibold text-brand-900">{v.fullName}</p>
+                  <p className="text-sm text-brand-700">House {v.houseNumber}</p>
+                  <p className="text-xs text-brand-500">
+                    {formatShortDate(v.originalDate)} → moved to {formatShortDate(v.rescheduledDate)}
+                  </p>
+                </div>
+                <span className="ml-3 shrink-0 rounded-lg bg-brand-50 px-3 py-2 text-xs font-semibold text-brand-700">
+                  {SKIP_REASON_LABELS[v.reason]}
                 </span>
               </li>
             ))}

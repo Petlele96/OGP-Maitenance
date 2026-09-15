@@ -40,3 +40,14 @@ export function buildFollowUpLink(fullName: string, whatsappNumber: string): str
   const message = buildFollowUpMessage(fullName);
   return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
 }
+
+/** Sent from the owner dashboard once, right after a new signup goes active. */
+export function buildWelcomeMessage(fullName: string, serviceDayLabel: string): string {
+  const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;
+  return `Hi ${firstName}, thanks for signing up with OGP Services. Your yard is scheduled for ${serviceDayLabel}. We'll WhatsApp you the day before each visit so you can unlock the gate and secure any dogs. Any questions, just reply here.`;
+}
+
+export function buildWelcomeLink(fullName: string, whatsappNumber: string, serviceDayLabel: string): string {
+  const message = buildWelcomeMessage(fullName, serviceDayLabel);
+  return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
+}

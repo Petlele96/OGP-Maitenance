@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { buildReminderLink, buildFollowUpLink } from "@/lib/site";
 import type { PlanId } from "@/lib/plans";
+import { SKIP_REASONS, type SkipReason } from "@/lib/schedule";
 
 type ViewMode = "today" | "tomorrow" | "week";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
@@ -21,12 +22,15 @@ interface TodayCustomer {
   plan: PlanId;
   done: boolean;
   completedAt: string | null;
+  skippedReason: SkipReason | null;
+  skippedRescheduledDate: string | null;
 }
 
 interface TodayData {
   date: string;
   total: number;
   doneCount: number;
+  skippedCount: number;
   groups: BlockGroup<TodayCustomer>[];
 }
 
@@ -69,6 +73,19 @@ function planLabel(plan: PlanId): string {
   return "Once-off";
 }
 
+const SKIP_REASON_LABELS: Record<SkipReason, string> = {
+  rain: "Rain",
+  gate_locked: "Gate locked",
+  dogs_loose: "Dogs loose",
+  customer_requested: "Customer requested",
+  other: "Other",
+};
+
+function formatShortDate(dateKey: string): string {
+  const date = new Date(`${dateKey}T00:00:00`);
+  return date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+}
+
 export default function OpsPage() {
   const [authState, setAuthState] = useState<AuthState>("checking");
   const [password, setPassword] = useState("");
@@ -80,6 +97,8 @@ export default function OpsPage() {
   const [tomorrow, setTomorrow] = useState<TomorrowData | null>(null);
   const [week, setWeek] = useState<WeekDay[] | null>(null);
   const [completingId, setCompletingId] = useState<string | null>(null);
+  const [pickingReasonId, setPickingReasonId] = useState<string | null>(null);
+  const [skippingId, setSkippingId] = useState<string | null>(null);
 
   const loadToday = useCallback(async () => {
     const res = await fetch("/api/ops/today", { cache: "no-store" });
@@ -165,6 +184,38 @@ export default function OpsPage() {
     setCompletingId(null);
   }
 
+  async function handleSkip(signupId: string, reason: SkipReason) {
+    setSkippingId(signupId);
+    const res = await fetch("/api/ops/skip", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signupId, reason }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setToday((prev) => {
+        if (!prev) return prev;
+        const alreadySkipped = prev.groups.some((g) =>
+          g.customers.some((c) => c.id === signupId && c.skippedReason !== null)
+        );
+        return {
+          ...prev,
+          skippedCount: alreadySkipped ? prev.skippedCount : prev.skippedCount + 1,
+          groups: prev.groups.map((g) => ({
+            ...g,
+            customers: g.customers.map((c) =>
+              c.id === signupId
+                ? { ...c, skippedReason: reason, skippedRescheduledDate: data.rescheduledDate }
+                : c
+            ),
+          })),
+        };
+      });
+    }
+    setSkippingId(null);
+    setPickingReasonId(null);
+  }
+
   async function handleLogout() {
     await fetch("/api/ops/logout", { method: "POST" });
     setAuthState("unauthenticated");
@@ -246,7 +297,7 @@ export default function OpsPage() {
           <div className="mb-4 rounded-xl bg-brand-500 px-4 py-3 text-center text-white shadow-sm">
             <span className="text-lg font-bold">{today.doneCount}</span>
             <span className="text-sm"> done · </span>
-            <span className="text-lg font-bold">{today.total - today.doneCount}</span>
+            <span className="text-lg font-bold">{today.total - today.doneCount - today.skippedCount}</span>
             <span className="text-sm"> remaining</span>
           </div>
 
@@ -264,7 +315,7 @@ export default function OpsPage() {
                       <li
                         key={c.id}
                         className={`rounded-2xl p-4 shadow-sm ring-1 ${
-                          c.done ? "bg-brand-50 ring-brand-100" : "bg-white ring-brand-100"
+                          c.done || c.skippedReason ? "bg-brand-50 ring-brand-100" : "bg-white ring-brand-100"
                         }`}
                       >
                         <div className="flex items-center justify-between">
@@ -281,16 +332,54 @@ export default function OpsPage() {
                             <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-sm font-semibold text-brand-700">
                               ✓ {c.completedAt ? formatTime(c.completedAt) : "Done"}
                             </span>
+                          ) : c.skippedReason ? (
+                            <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-right text-xs font-semibold text-brand-700">
+                              Skipped: {SKIP_REASON_LABELS[c.skippedReason]}
+                              {c.skippedRescheduledDate && (
+                                <>
+                                  <br />→ {formatShortDate(c.skippedRescheduledDate)}
+                                </>
+                              )}
+                            </span>
                           ) : (
-                            <button
-                              onClick={() => handleDone(c.id)}
-                              disabled={completingId === c.id}
-                              className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                            >
-                              Done
-                            </button>
+                            <div className="ml-3 flex shrink-0 gap-2">
+                              <button
+                                onClick={() => setPickingReasonId(c.id)}
+                                disabled={completingId === c.id}
+                                className="rounded-lg border-2 border-brand-300 px-3 py-3 text-sm font-semibold text-brand-700 disabled:opacity-60"
+                              >
+                                Can&apos;t do
+                              </button>
+                              <button
+                                onClick={() => handleDone(c.id)}
+                                disabled={completingId === c.id}
+                                className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                              >
+                                Done
+                              </button>
+                            </div>
                           )}
                         </div>
+                        {pickingReasonId === c.id && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {SKIP_REASONS.map((reason) => (
+                              <button
+                                key={reason}
+                                onClick={() => handleSkip(c.id, reason)}
+                                disabled={skippingId === c.id}
+                                className="rounded-lg border-2 border-brand-300 px-3 py-2 text-xs font-semibold text-brand-700 disabled:opacity-60"
+                              >
+                                {SKIP_REASON_LABELS[reason]}
+                              </button>
+                            ))}
+                            <button
+                              onClick={() => setPickingReasonId(null)}
+                              className="rounded-lg px-3 py-2 text-xs font-semibold text-brand-500 underline"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
                         {c.done && c.plan === "once-off" && (
                           <a
                             href={buildFollowUpLink(c.fullName, c.whatsappNumber)}

@@ -59,3 +59,22 @@ alter table signups drop constraint if exists signups_plan_check;
 
 -- Once-off bookings only: the single date they're booked for. Null for subscribers.
 alter table signups add column if not exists scheduled_visit_date date;
+
+-- Set once the owner has sent the WhatsApp welcome message after signup. Null = not yet welcomed.
+alter table signups add column if not exists welcomed_at timestamptz;
+
+-- One row per "Can't do" tap on the ops page: the visit that was skipped, why, and the
+-- working day the operator moved the customer to. Reason validated in Zod, not a DB
+-- check, to keep this migration idempotently re-runnable without a guarded DO block.
+create table if not exists skipped_visits (
+  id uuid primary key default gen_random_uuid(),
+  signup_id uuid not null references signups(id) on delete cascade,
+  original_date date not null,
+  reason text not null,
+  rescheduled_date date not null,
+  created_at timestamptz not null default now(),
+  unique (signup_id, original_date)
+);
+
+create index if not exists skipped_visits_signup_id_idx on skipped_visits (signup_id);
+create index if not exists skipped_visits_created_at_idx on skipped_visits (created_at);
