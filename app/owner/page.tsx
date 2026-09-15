@@ -13,14 +13,6 @@ interface FailedOrOverdue {
   status: "failed" | "overdue";
 }
 
-interface LaunchOfferCustomer {
-  id: string;
-  fullName: string;
-  houseNumber: string;
-  whatsappNumber: string;
-  startDate: string | null;
-}
-
 interface DashboardData {
   activeCustomers: { total: number; monthly: number; annual: number };
   onceOffJobsThisMonth: number;
@@ -28,7 +20,6 @@ interface DashboardData {
   failedOrOverdue: FailedOrOverdue[];
   cancellationsThisMonth: number;
   completion: { done: number; scheduled: number };
-  launchOfferCustomers: LaunchOfferCustomer[];
 }
 
 function formatRand(amount: number): string {
@@ -185,33 +176,6 @@ export default function OwnerPage() {
                 </div>
                 <span className="ml-3 shrink-0 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
                   {c.status === "failed" ? "Failed" : `${c.daysLate} day${c.daysLate === 1 ? "" : "s"} overdue`}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
-        <h2 className="text-sm font-semibold text-brand-900">Launch offer - second month free</h2>
-        <p className="mt-1 text-xs text-brand-500">
-          {data.launchOfferCustomers.length} of 50 spots used. Manually refund month 2 for these customers.
-        </p>
-        {data.launchOfferCustomers.length === 0 ? (
-          <p className="mt-3 text-sm text-brand-500">No launch offer customers yet.</p>
-        ) : (
-          <ul className="mt-3 flex flex-col gap-3">
-            {data.launchOfferCustomers.map((c) => (
-              <li key={c.id} className="flex items-center justify-between border-t border-brand-50 pt-3 first:border-0 first:pt-0">
-                <div className="min-w-0">
-                  <p className="font-semibold text-brand-900">{c.fullName}</p>
-                  <p className="text-sm text-brand-700">House {c.houseNumber}</p>
-                  <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
-                    {c.whatsappNumber}
-                  </a>
-                </div>
-                <span className="ml-3 shrink-0 text-xs text-brand-500">
-                  {c.startDate ? new Date(c.startDate).toLocaleDateString() : "-"}
                 </span>
               </li>
             ))}

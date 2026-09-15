@@ -7,7 +7,6 @@ import {
   getFailedOrOverdueCustomers,
   getCancellationsThisMonth,
   getCompletionRateThisMonth,
-  getLaunchOfferCustomers,
 } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -22,7 +21,6 @@ export async function GET(req: NextRequest) {
     failedOrOverdue,
     cancellationsThisMonth,
     completion,
-    launchOfferCustomers,
   ] = await Promise.all([
     getActiveCustomerCounts(),
     getOnceOffJobsThisMonth(),
@@ -30,7 +28,6 @@ export async function GET(req: NextRequest) {
     getFailedOrOverdueCustomers(),
     getCancellationsThisMonth(),
     getCompletionRateThisMonth(),
-    getLaunchOfferCustomers(),
   ]);
 
   return NextResponse.json({
@@ -44,6 +41,5 @@ export async function GET(req: NextRequest) {
     failedOrOverdue,
     cancellationsThisMonth,
     completion,
-    launchOfferCustomers,
   });
 }

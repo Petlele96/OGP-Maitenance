@@ -93,11 +93,6 @@ export default function TermsPage() {
           items={["Monthly: R200 per month", "Annual: R2,000 for twelve months (two months free)", "Once-off visit: R280"]}
         />
         <p>Payment is by debit order through PayFast. The monthly amount comes off automatically on the same date each month.</p>
-        <p>
-          <span className="font-medium text-navy">Launch offer:</span> the first 50 customers get their second month
-          free. You pay the normal price when you sign up, and we refund your second month&apos;s payment once it is
-          due.
-        </p>
       </Section>
 
       <Section number="4" title="If your payment fails">

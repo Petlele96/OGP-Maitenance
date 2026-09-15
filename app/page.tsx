@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { PLANS, type PlanId } from "@/lib/plans";
@@ -11,7 +11,6 @@ import {
   REPORT_PROBLEM_LINK,
   COMPANY_NAME,
   COMPANY_REG,
-  LAUNCH_OFFER_SPOTS,
 } from "@/lib/site";
 
 const COVERAGE_ITEMS = [
@@ -47,15 +46,7 @@ export default function SignupPage() {
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [spotsLeft, setSpotsLeft] = useState<number | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
-
-  useEffect(() => {
-    fetch("/api/launch-offer", { cache: "no-store" })
-      .then((res) => res.json())
-      .then((data) => setSpotsLeft(data.spotsLeft))
-      .catch(() => setSpotsLeft(null));
-  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -234,22 +225,7 @@ export default function SignupPage() {
         </a>
       </div>
 
-      {/* 8. Launch offer */}
-      <section className="border-t border-navy/10 py-24">
-        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Launch offer</h2>
-        <p className="mt-6 text-[17px] leading-relaxed text-navy">
-          The first {LAUNCH_OFFER_SPOTS} customers get their second month free.
-        </p>
-        <p className="mt-2 text-sm text-navy/60">
-          {spotsLeft === null
-            ? "Checking spots..."
-            : spotsLeft > 0
-              ? `${spotsLeft} of ${LAUNCH_OFFER_SPOTS} spots left.`
-              : `All ${LAUNCH_OFFER_SPOTS} spots are taken.`}
-        </p>
-      </section>
-
-      {/* 9. Signup form */}
+      {/* 8. Signup form */}
       <section id="signup-form" className="border-t border-navy/10 py-24">
         <form onSubmit={handleSubmit} className="flex flex-col gap-10" noValidate>
           <fieldset>
@@ -415,7 +391,7 @@ export default function SignupPage() {
         <form ref={formRef} method="POST" className="hidden" />
       </section>
 
-      {/* 10. Footer */}
+      {/* 9. Footer */}
       <footer className="border-t border-navy/10 py-24">
         <p className="text-sm text-navy/60">
           WhatsApp{" "}
