@@ -157,7 +157,28 @@ export default function SignupPage() {
         </ol>
       </section>
 
-      {/* 5. Our workers */}
+      {/* 5. Your first month */}
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Your first month</h2>
+        <p className="mt-6 text-[17px] leading-relaxed text-navy">
+          Most yards need a proper clean-up the first time. We do it over your first two visits, at no extra cost.
+        </p>
+        <ul className="mt-6 flex flex-col gap-3">
+          <li className="text-[17px] leading-relaxed text-navy">
+            <span className="font-semibold">Visit 1</span> — grass cut, overgrowth cleared, rubbish and cuttings
+            removed.
+          </li>
+          <li className="text-[17px] leading-relaxed text-navy">
+            <span className="font-semibold">Visit 2</span> — edges trimmed, weeds pulled and treated, paving and
+            kerb cleaned.
+          </li>
+        </ul>
+        <p className="mt-4 text-sm leading-relaxed text-navy/60">
+          After that, every visit keeps your yard at that standard.
+        </p>
+      </section>
+
+      {/* 6. Our workers */}
       <section className="border-t border-navy/10 py-24">
         <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Our workers</h2>
         <ul className="mt-6 space-y-3">
@@ -175,7 +196,7 @@ export default function SignupPage() {
         </a>
       </div>
 
-      {/* 6. Credibility - quiet, understated */}
+      {/* 7. Credibility - quiet, understated */}
       <section className="border-t border-navy/10 py-24">
         <div className="border border-navy/15 px-5 py-4">
           <p className="text-xs font-medium text-navy">
@@ -187,7 +208,7 @@ export default function SignupPage() {
         </div>
       </section>
 
-      {/* 7. Price */}
+      {/* 8. Price */}
       <section className="border-t border-navy/10 py-24">
         <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Price</h2>
         <div className="mt-6 flex items-baseline gap-2">
@@ -209,7 +230,7 @@ export default function SignupPage() {
 
         <div className="mt-3 flex items-center justify-between border border-navy/15 px-5 py-4">
           <div>
-            <span className="text-lg font-semibold text-navy">R280</span>
+            <span className="text-lg font-semibold text-navy">R450</span>
             <span className="ml-2 text-sm text-navy/50">once-off visit</span>
           </div>
           <span className="text-xs font-medium uppercase tracking-wide text-navy/40">Select below</span>
@@ -225,7 +246,7 @@ export default function SignupPage() {
         </a>
       </div>
 
-      {/* 8. Signup form */}
+      {/* 9. Signup form */}
       <section id="signup-form" className="border-t border-navy/10 py-24">
         <form onSubmit={handleSubmit} className="flex flex-col gap-10" noValidate>
           <fieldset>
@@ -391,7 +412,7 @@ export default function SignupPage() {
         <form ref={formRef} method="POST" className="hidden" />
       </section>
 
-      {/* 9. Footer */}
+      {/* 10. Footer */}
       <footer className="border-t border-navy/10 py-24">
         <p className="text-sm text-navy/60">
           WhatsApp{" "}

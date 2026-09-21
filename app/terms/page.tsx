@@ -90,7 +90,7 @@ export default function TermsPage() {
 
       <Section number="3" title="What you pay">
         <List
-          items={["Monthly: R200 per month", "Annual: R2,000 for twelve months (two months free)", "Once-off visit: R280"]}
+          items={["Monthly: R200 per month", "Annual: R2,000 for twelve months (two months free)", "Once-off visit: R450"]}
         />
         <p>Payment is by debit order through PayFast. The monthly amount comes off automatically on the same date each month.</p>
       </Section>

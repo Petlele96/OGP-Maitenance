@@ -41,11 +41,11 @@ export const PLANS: Record<PlanId, Plan> = {
   "once-off": {
     id: "once-off",
     label: "Once-off visit",
-    amount: 280.0,
+    amount: 450.0,
     recurring: false,
     itemName: "OGP Services - Once-off Yard Visit",
     itemDescription: "Single yard visit: cutting, weeding, edging, refuse removal, general tidy.",
-    priceLine: "R280 once-off",
+    priceLine: "R450 once-off",
   },
 };
 
