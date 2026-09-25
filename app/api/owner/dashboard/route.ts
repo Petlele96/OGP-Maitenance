@@ -9,6 +9,7 @@ import {
   getCompletionRateThisMonth,
   getUnwelcomedCustomers,
   getSkippedVisitsThisMonth,
+  getBookedCustomers,
 } from "@/lib/db";
 import { nextServiceDate, nowInJohannesburg } from "@/lib/schedule";
 
@@ -31,6 +32,7 @@ export async function GET(req: NextRequest) {
     completion,
     unwelcomedCustomers,
     skippedVisits,
+    bookedCustomers,
   ] = await Promise.all([
     getActiveCustomerCounts(),
     getOnceOffJobsThisMonth(),
@@ -40,6 +42,7 @@ export async function GET(req: NextRequest) {
     getCompletionRateThisMonth(),
     getUnwelcomedCustomers(),
     getSkippedVisitsThisMonth(),
+    getBookedCustomers(),
   ]);
 
   const now = nowInJohannesburg();
@@ -51,6 +54,17 @@ export async function GET(req: NextRequest) {
     serviceDayLabel: formatServiceDay(
       nextServiceDate({ service_slot: c.serviceSlot, scheduled_visit_date: c.scheduledVisitDate }, now)
     ),
+  }));
+
+  const booked = bookedCustomers.map((c) => ({
+    id: c.id,
+    fullName: c.fullName,
+    houseNumber: c.houseNumber,
+    whatsappNumber: c.whatsappNumber,
+    serviceDayLabel: formatServiceDay(nextServiceDate({ service_slot: c.serviceSlot, scheduled_visit_date: null }, now)),
+    paymentLinkSentAt: c.paymentLinkSentAt,
+    paymentLinkExpired:
+      c.paymentLinkExpiresAt !== null && new Date(c.paymentLinkExpiresAt).getTime() < Date.now(),
   }));
 
   return NextResponse.json({
@@ -66,5 +80,7 @@ export async function GET(req: NextRequest) {
     completion,
     unwelcomedCustomers: unwelcomed,
     skippedVisits,
+    bookedCount: bookedCustomers.length,
+    bookedCustomers: booked,
   });
 }

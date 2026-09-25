@@ -32,6 +32,16 @@ interface SkippedVisit {
   rescheduledDate: string;
 }
 
+interface BookedCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  serviceDayLabel: string;
+  paymentLinkSentAt: string | null;
+  paymentLinkExpired: boolean;
+}
+
 interface DashboardData {
   activeCustomers: { total: number; monthly: number; annual: number };
   onceOffJobsThisMonth: number;
@@ -41,6 +51,8 @@ interface DashboardData {
   completion: { done: number; scheduled: number };
   unwelcomedCustomers: UnwelcomedCustomer[];
   skippedVisits: SkippedVisit[];
+  bookedCount: number;
+  bookedCustomers: BookedCustomer[];
 }
 
 function formatRand(amount: number): string {
@@ -183,6 +195,11 @@ export default function OwnerPage() {
         </div>
       </div>
 
+      <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+        <p className="text-xs font-medium text-brand-500">Booked, awaiting payment</p>
+        <p className="mt-1 text-2xl font-bold text-brand-900">{data.bookedCount}</p>
+      </div>
+
       <div className="rounded-2xl bg-brand-600 p-4 shadow-sm">
         <p className="text-xs font-medium text-brand-100">Money in this month</p>
         <p className="mt-1 text-2xl font-bold text-white">{formatRand(data.revenueThisMonth.total)}</p>
@@ -224,6 +241,31 @@ export default function OwnerPage() {
                 </div>
                 <span className="ml-3 shrink-0 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
                   {c.status === "failed" ? "Failed" : `${c.daysLate} day${c.daysLate === 1 ? "" : "s"} overdue`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+        <h2 className="text-sm font-semibold text-brand-900">Booked - awaiting payment</h2>
+        {data.bookedCustomers.length === 0 ? (
+          <p className="mt-3 text-sm text-brand-500">No one's waiting to pay.</p>
+        ) : (
+          <ul className="mt-3 flex flex-col gap-3">
+            {data.bookedCustomers.map((c) => (
+              <li key={c.id} className="flex items-center justify-between border-t border-brand-50 pt-3 first:border-0 first:pt-0">
+                <div className="min-w-0">
+                  <p className="font-semibold text-brand-900">{c.fullName}</p>
+                  <p className="text-sm text-brand-700">House {c.houseNumber}</p>
+                  <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
+                    {c.whatsappNumber}
+                  </a>
+                  <p className="mt-0.5 text-xs text-brand-500">Service day: {c.serviceDayLabel}</p>
+                </div>
+                <span className="ml-3 shrink-0 rounded-lg bg-brand-50 px-3 py-2 text-xs font-semibold text-brand-700">
+                  {c.paymentLinkExpired ? "Link expired" : c.paymentLinkSentAt ? "Link sent" : "Not sent yet"}
                 </span>
               </li>
             ))}

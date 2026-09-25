@@ -5,7 +5,7 @@ import { buildReminderLink, buildFollowUpLink } from "@/lib/site";
 import type { PlanId } from "@/lib/plans";
 import { SKIP_REASONS, type SkipReason } from "@/lib/schedule";
 
-type ViewMode = "today" | "tomorrow" | "week";
+type ViewMode = "today" | "tomorrow" | "week" | "booked";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
 
 interface BlockGroup<T> {
@@ -54,6 +54,23 @@ interface WeekDay {
   customers: { id: string; fullName: string; houseNumber: string; plan: PlanId; done: boolean }[];
 }
 
+interface BookedCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  plan: PlanId;
+  block: number | null;
+  serviceDayLabel: string;
+  paymentLinkSentAt: string | null;
+  paymentLinkExpired: boolean;
+}
+
+interface BookedData {
+  total: number;
+  groups: BlockGroup<BookedCustomer>[];
+}
+
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
@@ -96,9 +113,11 @@ export default function OpsPage() {
   const [today, setToday] = useState<TodayData | null>(null);
   const [tomorrow, setTomorrow] = useState<TomorrowData | null>(null);
   const [week, setWeek] = useState<WeekDay[] | null>(null);
+  const [booked, setBooked] = useState<BookedData | null>(null);
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [pickingReasonId, setPickingReasonId] = useState<string | null>(null);
   const [skippingId, setSkippingId] = useState<string | null>(null);
+  const [sendingLinkId, setSendingLinkId] = useState<string | null>(null);
 
   const loadToday = useCallback(async () => {
     const res = await fetch("/api/ops/today", { cache: "no-store" });
@@ -129,6 +148,15 @@ export default function OpsPage() {
     setWeek(data.days);
   }, []);
 
+  const loadBooked = useCallback(async () => {
+    const res = await fetch("/api/ops/booked", { cache: "no-store" });
+    if (res.status === 401) {
+      setAuthState("unauthenticated");
+      return;
+    }
+    setBooked(await res.json());
+  }, []);
+
   useEffect(() => {
     loadToday();
   }, [loadToday]);
@@ -137,7 +165,8 @@ export default function OpsPage() {
     if (authState !== "authenticated") return;
     if (view === "tomorrow" && !tomorrow) loadTomorrow();
     if (view === "week" && !week) loadWeek();
-  }, [authState, view, tomorrow, week, loadTomorrow, loadWeek]);
+    if (view === "booked" && !booked) loadBooked();
+  }, [authState, view, tomorrow, week, booked, loadTomorrow, loadWeek, loadBooked]);
 
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
@@ -216,12 +245,44 @@ export default function OpsPage() {
     setPickingReasonId(null);
   }
 
+  async function handleSendPaymentLink(signupId: string) {
+    setSendingLinkId(signupId);
+    // Opened synchronously, before the fetch, so mobile browsers don't treat it as an
+    // unrequested popup - we redirect this same tab to WhatsApp once the link is ready.
+    const waTab = window.open("", "_blank");
+    const res = await fetch("/api/ops/send-payment-link", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signupId }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (waTab) waTab.location.href = data.whatsappLink;
+      setBooked((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          groups: prev.groups.map((g) => ({
+            ...g,
+            customers: g.customers.map((c) =>
+              c.id === signupId ? { ...c, paymentLinkSentAt: new Date().toISOString(), paymentLinkExpired: false } : c
+            ),
+          })),
+        };
+      });
+    } else if (waTab) {
+      waTab.close();
+    }
+    setSendingLinkId(null);
+  }
+
   async function handleLogout() {
     await fetch("/api/ops/logout", { method: "POST" });
     setAuthState("unauthenticated");
     setToday(null);
     setTomorrow(null);
     setWeek(null);
+    setBooked(null);
   }
 
   if (authState === "checking") {
@@ -289,6 +350,12 @@ export default function OpsPage() {
           className={`flex-1 rounded-lg py-2 text-sm font-semibold ${view === "week" ? "bg-brand-600 text-white" : "text-brand-700"}`}
         >
           This Week
+        </button>
+        <button
+          onClick={() => setView("booked")}
+          className={`flex-1 rounded-lg py-2 text-sm font-semibold ${view === "booked" ? "bg-brand-600 text-white" : "text-brand-700"}`}
+        >
+          Booked
         </button>
       </div>
 
@@ -475,6 +542,63 @@ export default function OpsPage() {
             ))
           )}
         </div>
+      )}
+
+      {view === "booked" && (
+        <>
+          {!booked ? (
+            <p className="mt-8 text-center text-sm text-brand-500">Loading...</p>
+          ) : booked.total === 0 ? (
+            <p className="mt-8 text-center text-sm text-brand-500">No one's booked and waiting to pay.</p>
+          ) : (
+            <div className="flex flex-col gap-6">
+              <p className="text-sm text-brand-600">
+                {booked.total} customer{booked.total === 1 ? "" : "s"} booked, waiting on payment.
+              </p>
+              {booked.groups.map((group) => (
+                <div key={group.block ?? "none"}>
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-500">
+                    {blockHeading(group.block)}
+                  </h2>
+                  <ul className="flex flex-col gap-3">
+                    {group.customers.map((c) => (
+                      <li key={c.id} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-brand-900">{c.fullName}</p>
+                          <p className="text-sm text-brand-700">
+                            House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
+                          </p>
+                          <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
+                            {c.whatsappNumber}
+                          </a>
+                          <p className="mt-1 text-xs text-brand-500">Service day: {c.serviceDayLabel}</p>
+                          <p className="mt-1 text-xs text-brand-500">
+                            {c.paymentLinkExpired
+                              ? "Payment link expired"
+                              : c.paymentLinkSentAt
+                                ? `Link sent ${formatShortDate(c.paymentLinkSentAt.slice(0, 10))}`
+                                : "No payment link sent yet"}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleSendPaymentLink(c.id)}
+                          disabled={sendingLinkId === c.id}
+                          className="mt-3 w-full rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                        >
+                          {sendingLinkId === c.id
+                            ? "Sending..."
+                            : c.paymentLinkSentAt
+                              ? "Resend payment link"
+                              : "Send payment link"}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </main>
   );

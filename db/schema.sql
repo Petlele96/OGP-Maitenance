@@ -69,6 +69,21 @@ alter table signups add column if not exists scheduled_visit_date date;
 -- Set once the owner has sent the WhatsApp welcome message after signup. Null = not yet welcomed.
 alter table signups add column if not exists welcomed_at timestamptz;
 
+-- 'booked' joins the payment_status enum: a Stage 1 signup (name/house/WhatsApp/plan,
+-- given a service day) that hasn't been sent a payment link yet, or has one outstanding.
+-- Same idempotency reasoning as signups_plan_check above - drop the inline CHECK and
+-- validate the enum in Zod instead.
+alter table signups drop constraint if exists signups_payment_status_check;
+
+-- Regenerated each time "Send payment link" is tapped on the ops page, so a stale/expired
+-- link can always be replaced with a fresh one. Null until the first link is sent.
+alter table signups add column if not exists payment_link_token text;
+alter table signups add column if not exists payment_link_expires_at timestamptz;
+alter table signups add column if not exists payment_link_sent_at timestamptz;
+
+create unique index if not exists signups_payment_link_token_idx
+  on signups (payment_link_token) where payment_link_token is not null;
+
 -- One row per "Can't do" tap on the ops page: the visit that was skipped, why, and the
 -- working day the operator moved the customer to. Reason validated in Zod, not a DB
 -- check, to keep this migration idempotently re-runnable without a guarded DO block.

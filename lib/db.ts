@@ -55,7 +55,7 @@ export interface SignupRow {
   plan: PlanId;
   amount: string;
   start_date: string | null;
-  payment_status: "pending" | "active" | "failed" | "cancelled";
+  payment_status: "booked" | "pending" | "active" | "failed" | "cancelled";
   payfast_subscription_token: string | null;
   payfast_m_payment_id: string;
   service_slot: number | null;
@@ -65,6 +65,9 @@ export interface SignupRow {
   block: number | null;
   scheduled_visit_date: string | null;
   welcomed_at: string | null;
+  payment_link_token: string | null;
+  payment_link_expires_at: string | null;
+  payment_link_sent_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -89,31 +92,44 @@ async function pickLeastLoadedSlot(eligibleSlots: number[]): Promise<number> {
 }
 
 /**
- * True if this WhatsApp number already has an active monthly or annual subscription.
- * Scoped to subscriptions (not once-off) deliberately - a subscriber booking an extra
- * once-off job, or a past once-off customer booking another one, is normal repeat
- * business, not an accidental double-signup. Preventing two parallel *subscriptions* on
- * the same number is what actually avoids double-billing the same household.
+ * True if this WhatsApp number already has an active OR booked monthly/annual
+ * subscription. Scoped to subscriptions (not once-off) deliberately - a subscriber
+ * booking an extra once-off job, or a past once-off customer booking another one, is
+ * normal repeat business, not an accidental double-signup. Preventing two parallel
+ * *subscriptions* on the same number is what actually avoids double-billing (or
+ * double-booking) the same household - 'booked' counts here too, since letting someone
+ * book twice before ever paying is the same accidental-duplicate problem.
  */
-export async function hasActiveSubscription(whatsappNumber: string): Promise<boolean> {
+export async function hasExistingSubscription(whatsappNumber: string): Promise<boolean> {
   const { rows } = await getPool().query<{ exists: boolean }>(
     `select exists(
        select 1 from signups
-       where whatsapp_number = $1 and payment_status = 'active' and plan in ('monthly', 'annual')
+       where whatsapp_number = $1 and payment_status in ('active', 'booked') and plan in ('monthly', 'annual')
      ) as exists`,
     [whatsappNumber]
   );
   return rows[0].exists;
 }
 
-export async function createSignup(input: {
+interface InsertSignupInput {
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
   plan: PlanId;
   amount: number;
   block: number | null;
-}): Promise<SignupRow> {
+  paymentStatus: "pending" | "booked";
+}
+
+/**
+ * Shared by createSignup (pay now) and createBooking (pay later, see lib/db.ts's
+ * `generatePaymentLink`) - both need the exact same slot-assignment and row shape, only
+ * the initial payment_status differs. A booked row's `id` still becomes its
+ * payfast_m_payment_id up front, so whenever it's eventually paid (immediately or via a
+ * payment link days later) the ITN handler finds and activates the same row with zero
+ * special-casing.
+ */
+async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
   const id = randomUUID();
   // Once-off bookings don't recur, so there's no bi-monthly slot to assign - they get a
   // scheduled_visit_date instead, set once payment completes (see bookOnceOffVisit).
@@ -121,14 +137,39 @@ export async function createSignup(input: {
     ? await pickLeastLoadedSlot(eligibleSlotsForNewSignup(nowInJohannesburg()))
     : null;
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
-  // ever calls createSignup after the zod schema has confirmed agreedToTerms === true.
+  // ever calls this after the zod schema has confirmed agreedToTerms === true.
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10)
      returning *`,
-    [id, input.fullName, input.houseNumber, input.whatsappNumber, input.plan, input.amount, id, slot, input.block]
+    [
+      id,
+      input.fullName,
+      input.houseNumber,
+      input.whatsappNumber,
+      input.plan,
+      input.amount,
+      id,
+      slot,
+      input.block,
+      input.paymentStatus,
+    ]
   );
   return rows[0];
+}
+
+/** Direct signup-and-pay-now - unchanged behaviour, just routed through insertSignup. */
+export async function createSignup(
+  input: Omit<InsertSignupInput, "paymentStatus">
+): Promise<SignupRow> {
+  return insertSignup({ ...input, paymentStatus: "pending" });
+}
+
+/** Stage 1 of the book-then-pay flow - no PayFast interaction, just a service day reserved. */
+export async function createBooking(
+  input: Omit<InsertSignupInput, "paymentStatus">
+): Promise<SignupRow> {
+  return insertSignup({ ...input, paymentStatus: "booked" });
 }
 
 export async function getSignup(id: string): Promise<SignupRow | null> {
@@ -142,6 +183,58 @@ export async function getSignupByMPaymentId(mPaymentId: string): Promise<SignupR
     [mPaymentId]
   );
   return rows[0] ?? null;
+}
+
+export async function getSignupByPaymentLinkToken(token: string): Promise<SignupRow | null> {
+  const { rows } = await getPool().query<SignupRow>(
+    "select * from signups where payment_link_token = $1 limit 1",
+    [token]
+  );
+  return rows[0] ?? null;
+}
+
+export interface PaymentLink {
+  token: string;
+  expiresAt: string;
+  fullName: string;
+  whatsappNumber: string;
+  plan: PlanId;
+}
+
+/**
+ * Issues (or re-issues) a 7-day payment link token for a booked customer - the "Send
+ * payment link" button on the ops page calls this fresh every time, so a lost or expired
+ * link is always replaceable rather than a dead end. Only ever touches a still-'booked'
+ * row: once a customer is active, "resending" a link for them is a no-op (returns null).
+ * Returns the bits the caller needs to build the WhatsApp message, so it doesn't need a
+ * second lookup.
+ */
+export async function generatePaymentLink(signupId: string): Promise<PaymentLink | null> {
+  const token = randomUUID();
+  const { rows } = await getPool().query<{
+    payment_link_token: string;
+    payment_link_expires_at: string;
+    full_name: string;
+    whatsapp_number: string;
+    plan: PlanId;
+  }>(
+    `update signups
+     set payment_link_token = $2,
+         payment_link_expires_at = now() + interval '7 days',
+         payment_link_sent_at = now(),
+         updated_at = now()
+     where id = $1 and payment_status = 'booked'
+     returning payment_link_token, payment_link_expires_at::text, full_name, whatsapp_number, plan`,
+    [signupId, token]
+  );
+  if (!rows[0]) return null;
+  return {
+    token: rows[0].payment_link_token,
+    expiresAt: rows[0].payment_link_expires_at,
+    fullName: rows[0].full_name,
+    whatsappNumber: rows[0].whatsapp_number,
+    plan: rows[0].plan,
+  };
 }
 
 export async function activateSignup(id: string, subscriptionToken: string | null): Promise<void> {
@@ -561,5 +654,54 @@ export async function markWelcomed(id: string): Promise<void> {
     "update signups set welcomed_at = now() where id = $1 and payment_status = 'active'",
     [id]
   );
+}
+
+export interface BookedCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  plan: PlanId;
+  block: number | null;
+  serviceSlot: number | null;
+  paymentLinkSentAt: string | null;
+  paymentLinkExpiresAt: string | null;
+}
+
+/**
+ * Stage 1 signups waiting on Stage 2 - shown on the ops "Booked" tab (with a "Send
+ * payment link" action) and, read-only, on the owner dashboard's awaiting-payment list.
+ * Same raw-schedule-fields approach as getUnwelcomedCustomers - the caller works out the
+ * service day label via lib/schedule.ts.
+ */
+export async function getBookedCustomers(): Promise<BookedCustomer[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    plan: PlanId;
+    block: number | null;
+    service_slot: number | null;
+    payment_link_sent_at: string | null;
+    payment_link_expires_at: string | null;
+  }>(
+    `select id, full_name, house_number, whatsapp_number, plan, block, service_slot,
+            payment_link_sent_at, payment_link_expires_at::text
+     from signups
+     where payment_status = 'booked'
+     order by created_at asc`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    plan: r.plan,
+    block: r.block,
+    serviceSlot: r.service_slot,
+    paymentLinkSentAt: r.payment_link_sent_at,
+    paymentLinkExpiresAt: r.payment_link_expires_at,
+  }));
 }
 

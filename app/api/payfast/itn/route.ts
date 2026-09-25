@@ -68,6 +68,10 @@ export async function POST(req: NextRequest) {
     if (signup.payment_status === "active") {
       await markPaymentFailed(signup.id);
     } else {
+      // markSignupFailed only touches still-'pending' rows, so a failed attempt against a
+      // 'booked' row (someone started but abandoned/declined a payment-link checkout) is
+      // deliberately a no-op here - they simply stay 'booked' and can be sent a fresh
+      // payment link, rather than being moved to a dead-end 'failed' state.
       await markSignupFailed(signup.id);
     }
   } else if (paymentStatus === "PENDING") {

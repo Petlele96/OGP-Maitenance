@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSignup, hasExistingSubscription } from "@/lib/db";
+import { createBooking, hasExistingSubscription } from "@/lib/db";
 import { PLANS, isSubscriberPlan } from "@/lib/plans";
-import { buildCheckoutFields } from "@/lib/payfast";
 import { signupSchema, normalizeCellNumber } from "@/lib/validation";
 
 export const runtime = "nodejs";
 
-function siteUrl(req: NextRequest): string {
-  const configured = process.env.NEXT_PUBLIC_BASE_URL;
-  if (configured) return configured.replace(/\/$/, "");
-  return req.nextUrl.origin;
-}
-
+/**
+ * Stage 1 of the book-then-pay flow: name/house/WhatsApp/plan, no PayFast interaction.
+ * Scoped to monthly/annual - "recurring billing starts" in Stage 2 has no meaning for a
+ * once-off visit, so that plan only ever goes through the pay-now /api/signup route.
+ */
 export async function POST(req: NextRequest) {
   let body: unknown;
   try {
@@ -30,19 +28,26 @@ export async function POST(req: NextRequest) {
 
   const { fullName, houseNumber, plan: planId } = parsed.data;
   const whatsappNumber = normalizeCellNumber(parsed.data.whatsappNumber);
-  const plan = PLANS[planId];
 
-  if (isSubscriberPlan(planId) && (await hasExistingSubscription(whatsappNumber))) {
+  if (!isSubscriberPlan(planId)) {
+    return NextResponse.json(
+      { error: "Booking now and paying later is only available for the monthly and annual plans." },
+      { status: 400 }
+    );
+  }
+
+  if (await hasExistingSubscription(whatsappNumber)) {
     return NextResponse.json(
       {
         error:
-          "This WhatsApp number already has an active plan with us. If you'd like to make a change, message us on WhatsApp and we'll help.",
+          "This WhatsApp number already has an active or booked plan with us. If you'd like to make a change, message us on WhatsApp and we'll help.",
       },
       { status: 409 }
     );
   }
 
-  const signup = await createSignup({
+  const plan = PLANS[planId];
+  const booking = await createBooking({
     fullName,
     houseNumber,
     whatsappNumber,
@@ -51,16 +56,5 @@ export async function POST(req: NextRequest) {
     block: parsed.data.block ?? null,
   });
 
-  const base = siteUrl(req);
-  const { actionUrl, fields } = buildCheckoutFields({
-    signupId: signup.id,
-    fullName,
-    whatsappNumber,
-    plan,
-    returnUrl: `${base}/thank-you?id=${signup.id}`,
-    cancelUrl: `${base}/cancelled?id=${signup.id}`,
-    notifyUrl: `${base}/api/payfast/itn`,
-  });
-
-  return NextResponse.json({ id: signup.id, actionUrl, fields });
+  return NextResponse.json({ id: booking.id });
 }

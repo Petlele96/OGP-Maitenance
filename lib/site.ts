@@ -51,3 +51,19 @@ export function buildWelcomeLink(fullName: string, whatsappNumber: string, servi
   const message = buildWelcomeMessage(fullName, serviceDayLabel);
   return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
 }
+
+/** Sent from the ops "Booked" tab's "Send payment link" button. */
+export function buildPaymentLinkMessage(fullName: string, planLabel: string, payUrl: string): string {
+  const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;
+  return `Hi ${firstName}, OGP Services here. Ready to start your ${planLabel} plan? Complete your payment here: ${payUrl}\n\nThis link expires in 7 days.`;
+}
+
+export function buildPaymentLinkLink(
+  fullName: string,
+  whatsappNumber: string,
+  planLabel: string,
+  payUrl: string
+): string {
+  const message = buildPaymentLinkMessage(fullName, planLabel, payUrl);
+  return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
+}

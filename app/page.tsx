@@ -44,14 +44,15 @@ export default function SignupPage() {
   const [block, setBlock] = useState("");
   const [plan, setPlan] = useState<PlanId>("monthly");
   const [agreedToTerms, setAgreedToTerms] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [submittingAction, setSubmittingAction] = useState<"pay" | "book" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [booked, setBooked] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    setSubmitting(true);
+    setSubmittingAction("pay");
 
     try {
       const res = await fetch("/api/signup", {
@@ -70,7 +71,7 @@ export default function SignupPage() {
 
       if (!res.ok) {
         setError(data.error ?? "Something went wrong. Please check your details.");
-        setSubmitting(false);
+        setSubmittingAction(null);
         return;
       }
 
@@ -88,7 +89,39 @@ export default function SignupPage() {
       form.submit();
     } catch {
       setError("Could not reach the server. Check your connection and try again.");
-      setSubmitting(false);
+      setSubmittingAction(null);
+    }
+  }
+
+  async function handleBook() {
+    setError(null);
+    setSubmittingAction("book");
+
+    try {
+      const res = await fetch("/api/book", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          fullName,
+          houseNumber,
+          whatsappNumber,
+          plan,
+          agreedToTerms,
+          block: block === "" ? null : Number(block),
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "Something went wrong. Please check your details.");
+        setSubmittingAction(null);
+        return;
+      }
+
+      setBooked(true);
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+      setSubmittingAction(null);
     }
   }
 
@@ -248,6 +281,16 @@ export default function SignupPage() {
 
       {/* 9. Signup form */}
       <section id="signup-form" className="border-t border-navy/10 py-24">
+        {booked ? (
+          <div className="border border-navy/15 px-6 py-8">
+            <p className="text-lg font-semibold text-navy">You&apos;re booked!</p>
+            <p className="mt-3 text-[15px] leading-relaxed text-navy/70">
+              Thanks, {fullName.trim().split(/\s+/)[0] || "there"}. We&apos;ve reserved your {PLANS[plan].label}{" "}
+              plan and given you a service day. We&apos;ll WhatsApp you a payment link on {whatsappNumber} to get
+              started - no need to do anything else for now.
+            </p>
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="flex flex-col gap-10" noValidate>
           <fieldset>
             <legend className="mb-5 text-sm font-bold uppercase tracking-[0.12em] text-skyblue">
@@ -395,10 +438,10 @@ export default function SignupPage() {
           <div>
             <button
               type="submit"
-              disabled={submitting || !agreedToTerms}
+              disabled={submittingAction !== null || !agreedToTerms}
               className="h-14 w-full rounded-lg bg-cta text-base font-medium text-white transition hover:brightness-95 active:brightness-90 disabled:opacity-60"
             >
-              {submitting ? "Redirecting to secure payment..." : "Continue to secure payment"}
+              {submittingAction === "pay" ? "Redirecting to secure payment..." : "Continue to secure payment"}
             </button>
             <p className="mt-4 text-xs leading-relaxed text-navy/50">
               {PLANS[plan].recurring
@@ -406,9 +449,27 @@ export default function SignupPage() {
                 : "We'll take you to PayFast to pay safely for your visit."}
             </p>
           </div>
-        </form>
 
-        {/* Populated and submitted programmatically once /api/signup returns the signed PayFast fields. */}
+          {PLANS[plan].recurring && (
+            <div>
+              <button
+                type="button"
+                onClick={handleBook}
+                disabled={submittingAction !== null || !agreedToTerms}
+                className="h-14 w-full rounded-lg border-2 border-navy text-base font-medium text-navy transition hover:bg-navy hover:text-white disabled:opacity-60"
+              >
+                {submittingAction === "book" ? "Booking..." : "Book now — pay later"}
+              </button>
+              <p className="mt-4 text-xs leading-relaxed text-navy/50">
+                We&apos;ll reserve your service day now and WhatsApp you a payment link to activate it - happy to
+                pay upfront instead? Use the button above.
+              </p>
+            </div>
+          )}
+        </form>
+        )}
+
+        {/* Populated and submitted programmatically once /api/signup or /api/pay returns the signed PayFast fields. */}
         <form ref={formRef} method="POST" className="hidden" />
       </section>
 
