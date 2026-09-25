@@ -26,7 +26,9 @@ export async function GET(req: NextRequest) {
       whatsappNumber: c.whatsappNumber,
       plan: c.plan,
       block: c.block,
-      serviceDayLabel: formatServiceDay(nextServiceDate({ service_slot: c.serviceSlot, scheduled_visit_date: null }, now)),
+      serviceDayLabel: formatServiceDay(
+        nextServiceDate({ service_slot: c.serviceSlot, scheduled_visit_date: c.scheduledVisitDate }, now)
+      ),
       paymentLinkSentAt: c.paymentLinkSentAt,
       paymentLinkExpired: c.paymentLinkSentAt !== null && isExpired,
     };

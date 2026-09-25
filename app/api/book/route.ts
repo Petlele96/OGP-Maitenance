@@ -7,8 +7,9 @@ export const runtime = "nodejs";
 
 /**
  * Stage 1 of the book-then-pay flow: name/house/WhatsApp/plan, no PayFast interaction.
- * Scoped to monthly/annual - "recurring billing starts" in Stage 2 has no meaning for a
- * once-off visit, so that plan only ever goes through the pay-now /api/signup route.
+ * Available for all three plans - insertSignup gives a once-off booking its tentative
+ * visit date up front too, same as monthly/annual get their slot, so "given a service
+ * day" holds regardless of which plan was picked.
  */
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -29,14 +30,9 @@ export async function POST(req: NextRequest) {
   const { fullName, houseNumber, plan: planId } = parsed.data;
   const whatsappNumber = normalizeCellNumber(parsed.data.whatsappNumber);
 
-  if (!isSubscriberPlan(planId)) {
-    return NextResponse.json(
-      { error: "Booking now and paying later is only available for the monthly and annual plans." },
-      { status: 400 }
-    );
-  }
-
-  if (await hasExistingSubscription(whatsappNumber)) {
+  // Scoped to subscriptions, same as the pay-now route - a once-off booking (first-time
+  // or repeat) is normal business, not an accidental double-signup.
+  if (isSubscriberPlan(planId) && (await hasExistingSubscription(whatsappNumber))) {
     return NextResponse.json(
       {
         error:

@@ -61,7 +61,9 @@ export async function GET(req: NextRequest) {
     fullName: c.fullName,
     houseNumber: c.houseNumber,
     whatsappNumber: c.whatsappNumber,
-    serviceDayLabel: formatServiceDay(nextServiceDate({ service_slot: c.serviceSlot, scheduled_visit_date: null }, now)),
+    serviceDayLabel: formatServiceDay(
+      nextServiceDate({ service_slot: c.serviceSlot, scheduled_visit_date: c.scheduledVisitDate }, now)
+    ),
     paymentLinkSentAt: c.paymentLinkSentAt,
     paymentLinkExpired:
       c.paymentLinkExpiresAt !== null && new Date(c.paymentLinkExpiresAt).getTime() < Date.now(),

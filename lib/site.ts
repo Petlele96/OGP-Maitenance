@@ -1,3 +1,5 @@
+import { PLANS, type PlanId } from "./plans";
+
 export const WHATSAPP_DISPLAY = "079 533 5440";
 export const WHATSAPP_LINK = "https://wa.me/27795335440";
 export const COMPANY_NAME = "OGP Services (Pty) Ltd";
@@ -7,6 +9,11 @@ export const COMPANY_CSD = "MAAA130064";
 /** "0821234567" -> "27821234567", matching wa.me's expected format. */
 function toWhatsAppInternational(localNumber: string): string {
   return localNumber.replace(/^0/, "27");
+}
+
+/** "Monthly plan" / "Annual plan", but just "Once-off visit" - that label already reads fine alone. */
+export function planPhrase(id: PlanId): string {
+  return id === "once-off" ? PLANS[id].label : `${PLANS[id].label} plan`;
 }
 
 /** Sent from the ops "Tomorrow" list, the evening before a visit. */
@@ -53,17 +60,17 @@ export function buildWelcomeLink(fullName: string, whatsappNumber: string, servi
 }
 
 /** Sent from the ops "Booked" tab's "Send payment link" button. */
-export function buildPaymentLinkMessage(fullName: string, planLabel: string, payUrl: string): string {
+export function buildPaymentLinkMessage(fullName: string, planId: PlanId, payUrl: string): string {
   const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;
-  return `Hi ${firstName}, OGP Services here. Ready to start your ${planLabel} plan? Complete your payment here: ${payUrl}\n\nThis link expires in 7 days.`;
+  return `Hi ${firstName}, OGP Services here. Ready to start your ${planPhrase(planId)}? Complete your payment here: ${payUrl}\n\nThis link expires in 7 days.`;
 }
 
 export function buildPaymentLinkLink(
   fullName: string,
   whatsappNumber: string,
-  planLabel: string,
+  planId: PlanId,
   payUrl: string
 ): string {
-  const message = buildPaymentLinkMessage(fullName, planLabel, payUrl);
+  const message = buildPaymentLinkMessage(fullName, planId, payUrl);
   return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
 }

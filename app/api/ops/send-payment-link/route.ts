@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/ops-auth";
 import { generatePaymentLink } from "@/lib/db";
-import { PLANS } from "@/lib/plans";
 import { buildPaymentLinkLink } from "@/lib/site";
 
 export const runtime = "nodejs";
@@ -33,7 +32,7 @@ export async function POST(req: NextRequest) {
   if (!link) return NextResponse.json({ error: "Customer not found or already paid" }, { status: 404 });
 
   const payUrl = `${siteUrl(req)}/pay/${link.token}`;
-  const whatsappLink = buildPaymentLinkLink(link.fullName, link.whatsappNumber, PLANS[link.plan].label, payUrl);
+  const whatsappLink = buildPaymentLinkLink(link.fullName, link.whatsappNumber, link.plan, payUrl);
 
   return NextResponse.json({ whatsappLink, expiresAt: link.expiresAt });
 }

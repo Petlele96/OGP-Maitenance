@@ -11,6 +11,7 @@ import {
   REPORT_PROBLEM_LINK,
   COMPANY_NAME,
   COMPANY_REG,
+  planPhrase,
 } from "@/lib/site";
 
 const COVERAGE_ITEMS = [
@@ -285,9 +286,9 @@ export default function SignupPage() {
           <div className="border border-navy/15 px-6 py-8">
             <p className="text-lg font-semibold text-navy">You&apos;re booked!</p>
             <p className="mt-3 text-[15px] leading-relaxed text-navy/70">
-              Thanks, {fullName.trim().split(/\s+/)[0] || "there"}. We&apos;ve reserved your {PLANS[plan].label}{" "}
-              plan and given you a service day. We&apos;ll WhatsApp you a payment link on {whatsappNumber} to get
-              started - no need to do anything else for now.
+              Thanks, {fullName.trim().split(/\s+/)[0] || "there"}. We&apos;ve reserved your {planPhrase(plan)} and
+              given you a service day. We&apos;ll WhatsApp you a payment link on {whatsappNumber} to get started -
+              no need to do anything else for now.
             </p>
           </div>
         ) : (
@@ -450,22 +451,20 @@ export default function SignupPage() {
             </p>
           </div>
 
-          {PLANS[plan].recurring && (
-            <div>
-              <button
-                type="button"
-                onClick={handleBook}
-                disabled={submittingAction !== null || !agreedToTerms}
-                className="h-14 w-full rounded-lg border-2 border-navy text-base font-medium text-navy transition hover:bg-navy hover:text-white disabled:opacity-60"
-              >
-                {submittingAction === "book" ? "Booking..." : "Book now — pay later"}
-              </button>
-              <p className="mt-4 text-xs leading-relaxed text-navy/50">
-                We&apos;ll reserve your service day now and WhatsApp you a payment link to activate it - happy to
-                pay upfront instead? Use the button above.
-              </p>
-            </div>
-          )}
+          <div>
+            <button
+              type="button"
+              onClick={handleBook}
+              disabled={submittingAction !== null || !agreedToTerms}
+              className="h-14 w-full rounded-lg border-2 border-navy text-base font-medium text-navy transition hover:bg-navy hover:text-white disabled:opacity-60"
+            >
+              {submittingAction === "book" ? "Booking..." : "Book now — pay later"}
+            </button>
+            <p className="mt-4 text-xs leading-relaxed text-navy/50">
+              We&apos;ll reserve your service day now and WhatsApp you a payment link to activate it - happy to pay
+              upfront instead? Use the button above.
+            </p>
+          </div>
         </form>
         )}
 

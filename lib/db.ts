@@ -131,16 +131,23 @@ interface InsertSignupInput {
  */
 async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
   const id = randomUUID();
-  // Once-off bookings don't recur, so there's no bi-monthly slot to assign - they get a
-  // scheduled_visit_date instead, set once payment completes (see bookOnceOffVisit).
+  // Once-off bookings don't recur, so there's no bi-monthly slot to assign.
   const slot = isSubscriberPlan(input.plan)
     ? await pickLeastLoadedSlot(eligibleSlotsForNewSignup(nowInJohannesburg()))
     : null;
+  // A booked once-off gets its service day reserved up front too, same as monthly/annual
+  // get their slot at booking time - "given a service day" shouldn't depend on which plan
+  // was picked. The direct pay-now once-off flow is untouched: it still waits for
+  // bookOnceOffVisit at ITN completion (see there), since payment is immediate anyway.
+  const scheduledVisitDate =
+    !isSubscriberPlan(input.plan) && input.paymentStatus === "booked"
+      ? toDateKey(addWorkingDays(nowInJohannesburg(), MIN_NOTICE_WORKING_DAYS))
+      : null;
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls this after the zod schema has confirmed agreedToTerms === true.
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10)
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11)
      returning *`,
     [
       id,
@@ -153,6 +160,7 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
       slot,
       input.block,
       input.paymentStatus,
+      scheduledVisitDate,
     ]
   );
   return rows[0];
@@ -664,6 +672,7 @@ export interface BookedCustomer {
   plan: PlanId;
   block: number | null;
   serviceSlot: number | null;
+  scheduledVisitDate: string | null;
   paymentLinkSentAt: string | null;
   paymentLinkExpiresAt: string | null;
 }
@@ -672,7 +681,8 @@ export interface BookedCustomer {
  * Stage 1 signups waiting on Stage 2 - shown on the ops "Booked" tab (with a "Send
  * payment link" action) and, read-only, on the owner dashboard's awaiting-payment list.
  * Same raw-schedule-fields approach as getUnwelcomedCustomers - the caller works out the
- * service day label via lib/schedule.ts.
+ * service day label via lib/schedule.ts. Returns both service_slot (monthly/annual) and
+ * scheduled_visit_date (once-off) since a booking can now be any of the three plans.
  */
 export async function getBookedCustomers(): Promise<BookedCustomer[]> {
   const { rows } = await getPool().query<{
@@ -683,11 +693,12 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     plan: PlanId;
     block: number | null;
     service_slot: number | null;
+    scheduled_visit_date: string | null;
     payment_link_sent_at: string | null;
     payment_link_expires_at: string | null;
   }>(
     `select id, full_name, house_number, whatsapp_number, plan, block, service_slot,
-            payment_link_sent_at, payment_link_expires_at::text
+            scheduled_visit_date::text, payment_link_sent_at, payment_link_expires_at::text
      from signups
      where payment_status = 'booked'
      order by created_at asc`
@@ -700,6 +711,7 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     plan: r.plan,
     block: r.block,
     serviceSlot: r.service_slot,
+    scheduledVisitDate: r.scheduled_visit_date,
     paymentLinkSentAt: r.payment_link_sent_at,
     paymentLinkExpiresAt: r.payment_link_expires_at,
   }));
