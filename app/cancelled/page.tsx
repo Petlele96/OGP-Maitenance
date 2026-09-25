@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { SiteFooter } from "../components/SiteFooter";
 
 export default function CancelledPage() {
   return (
+    <>
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center px-6 text-center">
       <h1 className="text-xl font-bold text-brand-900">Payment cancelled</h1>
       <p className="mt-2 text-sm text-brand-700">
@@ -14,5 +16,7 @@ export default function CancelledPage() {
         Back to signup
       </Link>
     </main>
+    <SiteFooter />
+    </>
   );
 }

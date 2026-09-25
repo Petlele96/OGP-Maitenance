@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { SiteFooter } from "../components/SiteFooter";
 
 type Status = "loading" | "pending" | "active" | "timeout" | "error";
 
@@ -58,6 +59,7 @@ function ThankYouContent() {
   }, [id]);
 
   return (
+    <>
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center px-6 text-center">
       {status === "loading" || status === "pending" ? (
         <>
@@ -101,5 +103,7 @@ function ThankYouContent() {
         Back to home
       </Link>
     </main>
+    <SiteFooter />
+    </>
   );
 }

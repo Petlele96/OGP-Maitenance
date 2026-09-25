@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ASK_QUESTION_LINK } from "@/lib/site";
+import { SiteFooter } from "../../components/SiteFooter";
 
 type Status = "loading" | "redirecting" | "error";
 
@@ -54,6 +55,7 @@ export default function PayPage({ params }: { params: { token: string } }) {
   }, [params.token]);
 
   return (
+    <>
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center px-6 text-center">
       {status === "loading" || status === "redirecting" ? (
         <>
@@ -82,5 +84,7 @@ export default function PayPage({ params }: { params: { token: string } }) {
       {/* Populated and submitted programmatically once /api/pay/[token] returns the signed PayFast fields. */}
       <form ref={formRef} method="POST" className="hidden" />
     </main>
+    <SiteFooter />
+    </>
   );
 }

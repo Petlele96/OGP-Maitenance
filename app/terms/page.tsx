@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
-import { COMPANY_NAME, COMPANY_REG, COMPANY_CSD, WHATSAPP_DISPLAY, WHATSAPP_LINK } from "@/lib/site";
+import { COMPANY_NAME, COMPANY_REG, COMPANY_CSD } from "@/lib/site";
+import { SiteFooter } from "../components/SiteFooter";
 
 export const metadata: Metadata = {
   title: "Terms and Conditions | OGP Services",
@@ -32,6 +33,7 @@ function List({ items }: { items: string[] }) {
 
 export default function TermsPage() {
   return (
+    <>
     <main className="mx-auto max-w-lg bg-white px-6 pb-20 text-navy">
       <header className="pb-10 pt-14">
         <Image src="/logo.png" alt="OGP Services" width={320} height={320} className="h-9 w-auto" />
@@ -177,8 +179,7 @@ export default function TermsPage() {
       <Section number="9" title="Our workers">
         <List
           items={[
-            "Every worker carries an OGP Services staff ID card and wears OGP Services uniform",
-            "Workers stay in the yard area only. They do not enter your house",
+            "Every worker is known to us and wears OGP Services uniform. They work in the yard only and never enter your house",
             "Workers do not ask customers for money, food or favours",
             "If a worker behaves badly, tell us on WhatsApp immediately",
           ]}
@@ -226,20 +227,13 @@ export default function TermsPage() {
         <p>These terms are governed by the laws of South Africa.</p>
       </Section>
 
-      <footer className="border-t border-navy/10 pt-10">
-        <p className="text-sm font-medium text-navy">Contact us</p>
-        <p className="mt-2 text-sm text-navy/60">
-          WhatsApp:{" "}
-          <a href={WHATSAPP_LINK} className="text-navy underline underline-offset-2">
-            {WHATSAPP_DISPLAY}
-          </a>
-          <br />
-          {COMPANY_NAME}, Platinum Village, Rustenburg
-        </p>
-        <Link href="/" className="mt-8 inline-block text-sm text-navy underline underline-offset-2">
+      <div className="border-t border-navy/10 py-10">
+        <Link href="/" className="text-sm text-navy underline underline-offset-2">
           Back to signup
         </Link>
-      </footer>
+      </div>
     </main>
+    <SiteFooter />
+    </>
   );
 }

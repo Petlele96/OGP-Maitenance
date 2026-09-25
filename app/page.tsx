@@ -4,15 +4,8 @@ import { useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { PLANS, type PlanId } from "@/lib/plans";
-import {
-  WHATSAPP_DISPLAY,
-  WHATSAPP_LINK,
-  ASK_QUESTION_LINK,
-  REPORT_PROBLEM_LINK,
-  COMPANY_NAME,
-  COMPANY_REG,
-  planPhrase,
-} from "@/lib/site";
+import { ASK_QUESTION_LINK, COMPANY_NAME, COMPANY_REG, planPhrase } from "@/lib/site";
+import { SiteFooter } from "./components/SiteFooter";
 
 const COVERAGE_ITEMS = [
   "Grass cut to an even height, front and back",
@@ -27,7 +20,6 @@ const COVERAGE_ITEMS = [
 const STEPS = ["You sign up.", "You get your service day.", "We WhatsApp you the day before.", "We come and do the work."];
 const WORKER_POINTS = [
   "Our workers are known to us.",
-  "They carry ID.",
   "They wear OGP Services clothing.",
   "They stay in the yard.",
   "They never enter the house.",
@@ -127,6 +119,7 @@ export default function SignupPage() {
   }
 
   return (
+    <>
     <main className="mx-auto max-w-lg bg-white px-6 text-navy">
       {/* 1. Logo + hero */}
       <header className="pb-24 pt-14">
@@ -472,22 +465,8 @@ export default function SignupPage() {
         <form ref={formRef} method="POST" className="hidden" />
       </section>
 
-      {/* 10. Footer */}
-      <footer className="border-t border-navy/10 py-24">
-        <p className="text-sm text-navy/60">
-          WhatsApp{" "}
-          <a href={WHATSAPP_LINK} className="text-navy underline underline-offset-2">
-            {WHATSAPP_DISPLAY}
-          </a>
-        </p>
-        <p className="mt-1 text-sm text-navy/60">{COMPANY_NAME}, Platinum Village, Rustenburg</p>
-        <a href={ASK_QUESTION_LINK} className={`${SECONDARY_BUTTON_CLASS} mt-6`}>
-          Ask a question
-        </a>
-        <a href={REPORT_PROBLEM_LINK} className={`${SECONDARY_BUTTON_CLASS} mt-3`}>
-          Report a problem
-        </a>
-      </footer>
     </main>
+    <SiteFooter />
+    </>
   );
 }

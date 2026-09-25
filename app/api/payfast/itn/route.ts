@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
     await activateSignup(signup.id, result.data.token ?? null);
     const amount = Number.parseFloat(result.data.amount_gross ?? "");
     if (Number.isFinite(amount)) {
-      await recordPayment(signup.id, amount, result.data.pf_payment_id ?? null);
+      await recordPayment(signup.id, amount, result.data.pf_payment_id ?? null, result.data.signature ?? "");
     }
     if (isFirstActivation && !isSubscriberPlan(signup.plan)) {
       await bookOnceOffVisit(signup.id);

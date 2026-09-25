@@ -306,13 +306,28 @@ export async function bookOnceOffVisit(id: string): Promise<void> {
   );
 }
 
-/** Idempotent via pf_payment_id's unique constraint - safe if PayFast retries an ITN. */
-export async function recordPayment(signupId: string, amount: number, pfPaymentId: string | null): Promise<void> {
+/**
+ * Idempotent via pf_payment_id's unique constraint - safe if PayFast retries an ITN.
+ * pf_payment_id (PayFast's own transaction id) should always be present, but Postgres
+ * never treats two NULLs as conflicting under a unique constraint - if it were ever
+ * missing, inserting with a bare null would let a retried ITN double-count revenue
+ * instead of being deduped. Falling back to the ITN's own signature closes that gap: an
+ * MD5 over the whole notification, it's identical across genuine retries of the same
+ * notification and differs across real transactions (different amount/date/ids feed the
+ * hash), so it's a safe substitute idempotency key for this rare case.
+ */
+export async function recordPayment(
+  signupId: string,
+  amount: number,
+  pfPaymentId: string | null,
+  itnSignature: string
+): Promise<void> {
+  const dedupeKey = pfPaymentId ?? `sig:${itnSignature}`;
   await getPool().query(
     `insert into payments (signup_id, amount, pf_payment_id)
      values ($1, $2, $3)
      on conflict (pf_payment_id) do nothing`,
-    [signupId, amount, pfPaymentId]
+    [signupId, amount, dedupeKey]
   );
 }
 

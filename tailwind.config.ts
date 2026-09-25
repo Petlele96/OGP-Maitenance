@@ -18,10 +18,13 @@ const config: Config = {
           700: "#146a3c",
           900: "#0e3f24",
         },
-        // OGP customer-facing brand palette (signup page only).
+        // OGP customer-facing brand palette (public pages: signup, terms, thank-you,
+        // cancelled, pay - not /ops or /owner, which keep the brand-* palette above).
         navy: "#123B6D",
         skyblue: "#1B8DD1",
         cta: "#F07A22",
+        // Footer background across those same public pages.
+        cream: "#FAF6EE",
       },
     },
   },

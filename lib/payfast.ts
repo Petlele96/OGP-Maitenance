@@ -205,10 +205,13 @@ async function confirmWithPayFastServer(paramString: string, baseUrl: string): P
 
 /**
  * Verifies a PayFast ITN (notify_url) POST. Reproduces the 4 checks from the official SDK's
- * Notification::isValidNotification, with one deliberate deviation: source-IP/host validation
- * is logged but non-fatal (DNS-based allowlists are known to be brittle behind proxies/CDNs).
- * The two checks that actually gate activation are the signature match and PayFast's own
- * server-side "VALID" confirmation - the latter is the authoritative check.
+ * Notification::isValidNotification: signature match, source-IP/host, merchant_id and
+ * amount_gross match, and PayFast's own server-side "VALID" confirmation. A confirmed
+ * source-IP mismatch is fatal; an *inconclusive* check (no x-forwarded-for header, or DNS
+ * resolution for PayFast's own hostnames failing) is logged but does not block - the
+ * difference between "definitely not PayFast" and "couldn't tell" matters here, since a
+ * transient DNS hiccup blocking every real payment would be worse than the risk it guards
+ * against.
  */
 export async function verifyItn(
   rawBody: string,
@@ -230,7 +233,10 @@ export async function verifyItn(
   if (!signatureValid) reasons.push("signature mismatch");
 
   const hostCheck = await sourceIpLooksValid(sourceIp);
-  if (hostCheck === false) reasons.push(`source ip ${sourceIp} not a recognised PayFast host (logged, non-fatal)`);
+  if (hostCheck === false) reasons.push(`source ip ${sourceIp} not a recognised PayFast host`);
+  else if (hostCheck === "unknown") {
+    console.warn("PayFast ITN source-IP check inconclusive (missing header or DNS lookup failed)", { sourceIp });
+  }
 
   if (data.merchant_id !== config.merchantId) reasons.push("merchant_id mismatch");
 
@@ -247,7 +253,5 @@ export async function verifyItn(
     reasons.push(`PayFast server confirmation request failed: ${(err as Error).message}`);
   }
 
-  const fatalReasons = reasons.filter((r) => !r.includes("(logged, non-fatal)"));
-
-  return { valid: fatalReasons.length === 0, reasons, data };
+  return { valid: reasons.length === 0, reasons, data };
 }
