@@ -100,6 +100,7 @@ const SKIP_REASON_LABELS: Record<SkipOrMoveReason, string> = {
   customer_requested: "Customer requested",
   other: "Other",
   moved: "Moved",
+  blocked: "Blocked date",
 };
 
 function formatShortDate(dateKey: string): string {

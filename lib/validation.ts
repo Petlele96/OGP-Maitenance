@@ -77,3 +77,38 @@ export const moveVisitSchema = z.object({
   originalDate: z.string().regex(DATE_KEY_REGEX),
   targetDate: z.string().regex(DATE_KEY_REGEX),
 });
+
+/** JS Date.getDay() convention: 0=Sunday .. 6=Saturday. */
+export const updateSettingsSchema = z.object({
+  dailyVisitLimit: z.number().int().min(1).max(100).optional(),
+  workingDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+});
+
+export const blockDateSchema = z.object({
+  date: z.string().regex(DATE_KEY_REGEX),
+  label: z.string().max(200).nullable().optional(),
+});
+
+export const unblockDateSchema = z.object({
+  date: z.string().regex(DATE_KEY_REGEX),
+});
+
+export const rebalanceApplySchema = z.object({
+  moves: z
+    .array(z.object({ signupId: z.string().uuid(), toSlot: z.number().int().min(1).max(14) }))
+    .min(1)
+    .max(50),
+});
+
+export const moveNextVisitSchema = z.object({
+  signupId: z.string().uuid(),
+  targetDate: z.string().regex(DATE_KEY_REGEX),
+});
+
+/** "Apply to all future visits" from the owner Customers tab - permanently changes the
+ * schedule field, unlike moveNextVisitSchema which only affects the next occurrence. */
+export const setServiceDaySchema = z.object({
+  signupId: z.string().uuid(),
+  serviceSlot: z.number().int().min(1).max(14).nullable().optional(),
+  scheduledVisitDate: z.string().regex(DATE_KEY_REGEX).nullable().optional(),
+});

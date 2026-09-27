@@ -5,9 +5,10 @@ import { buildWelcomeLink, buildChaseLink } from "@/lib/site";
 import type { SkipOrMoveReason } from "@/lib/schedule";
 import type { PlanId } from "@/lib/plans";
 import { MIN_BLOCK, MAX_BLOCK } from "@/lib/sort";
+import ScheduleTab from "./ScheduleTab";
 
 type AuthState = "checking" | "unauthenticated" | "authenticated";
-type OwnerTab = "dashboard" | "customers";
+type OwnerTab = "dashboard" | "customers" | "schedule";
 type PaymentMethod = "payfast" | "eft" | "cash";
 type PaymentStatus = "booked" | "pending" | "active" | "failed" | "cancelled";
 
@@ -115,6 +116,7 @@ const SKIP_REASON_LABELS: Record<SkipOrMoveReason, string> = {
   customer_requested: "Customer requested",
   other: "Other",
   moved: "Moved",
+  blocked: "Blocked date",
 };
 
 const PLAN_LABELS: Record<PlanId, string> = { monthly: "Monthly", annual: "Annual", "once-off": "Once-off" };
@@ -284,6 +286,10 @@ export default function OwnerPage() {
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
 
+  const [moveNextDate, setMoveNextDate] = useState("");
+  const [moveNextError, setMoveNextError] = useState<string | null>(null);
+  const [moveNextSubmitting, setMoveNextSubmitting] = useState(false);
+
   const loadDashboard = useCallback(async () => {
     const res = await fetch("/api/owner/dashboard", { cache: "no-store" });
     if (res.status === 401) {
@@ -375,6 +381,8 @@ export default function OwnerPage() {
     setPaymentAmount("");
     setPaymentDate("");
     setPaymentError(null);
+    setMoveNextDate("");
+    setMoveNextError(null);
   }
 
   async function handleUpdate(e: FormEvent) {
@@ -449,6 +457,23 @@ export default function OwnerPage() {
     await loadDashboard();
   }
 
+  async function handleMoveNextVisit(c: CustomerRow) {
+    if (!moveNextDate) return;
+    setMoveNextSubmitting(true);
+    setMoveNextError(null);
+    const res = await fetch("/api/owner/customers/move-next-visit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signupId: c.id, targetDate: moveNextDate }),
+    });
+    setMoveNextSubmitting(false);
+    if (!res.ok) {
+      setMoveNextError("Couldn't move that visit.");
+      return;
+    }
+    setMoveNextDate("");
+  }
+
   const filteredCustomers = useMemo(() => {
     if (!customers) return [];
     const q = search.trim().toLowerCase();
@@ -516,7 +541,15 @@ export default function OwnerPage() {
         >
           Customers
         </button>
+        <button
+          onClick={() => setTab("schedule")}
+          className={`flex-1 rounded-lg py-2 text-sm font-semibold ${tab === "schedule" ? "bg-brand-600 text-white" : "text-brand-700"}`}
+        >
+          Schedule
+        </button>
       </div>
+
+      {tab === "schedule" && <ScheduleTab />}
 
       {tab === "dashboard" && data && (
         <>
@@ -774,6 +807,31 @@ export default function OwnerPage() {
                           </button>
                         )}
                       </div>
+
+                      {c.paymentStatus === "active" && !c.pausedAt && (
+                        <div className="mt-4 rounded-xl bg-brand-50 p-3">
+                          <p className="text-xs font-semibold text-brand-700">
+                            Change service day - just the next visit (the service slot/date above changes it for every future visit instead)
+                          </p>
+                          <div className="mt-2 flex gap-2">
+                            <input
+                              type="date"
+                              value={moveNextDate}
+                              onChange={(e) => setMoveNextDate(e.target.value)}
+                              className="flex-1 rounded-lg border border-brand-200 px-2 py-2 text-sm text-brand-900"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleMoveNextVisit(c)}
+                              disabled={!moveNextDate || moveNextSubmitting}
+                              className="rounded-lg bg-brand-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                            >
+                              {moveNextSubmitting ? "Moving..." : "Move"}
+                            </button>
+                          </div>
+                          {moveNextError && <p className="mt-1 text-xs text-red-600">{moveNextError}</p>}
+                        </div>
+                      )}
 
                       {c.paymentMethod !== "payfast" && c.paymentStatus === "active" && (
                         <div className="mt-4 rounded-xl bg-brand-50 p-3">

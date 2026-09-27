@@ -11,6 +11,8 @@ import {
   nowInJohannesburg,
   MIN_NOTICE_WORKING_DAYS,
   MOVED_REASON,
+  BLOCKED_REASON,
+  SLOT_COUNT,
   type SkipReason,
   type SkipOrMoveReason,
 } from "./schedule";
@@ -136,9 +138,11 @@ interface InsertSignupInput {
  */
 async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
   const id = randomUUID();
+  const { workingDays } = await getAppSettings();
+  const now = nowInJohannesburg();
   // Once-off bookings don't recur, so there's no bi-monthly slot to assign.
   const slot = isSubscriberPlan(input.plan)
-    ? await pickLeastLoadedSlot(eligibleSlotsForNewSignup(nowInJohannesburg()))
+    ? await pickLeastLoadedSlot(eligibleSlotsForNewSignup(now, workingDays))
     : null;
   // A booked once-off gets its service day reserved up front too, same as monthly/annual
   // get their slot at booking time - "given a service day" shouldn't depend on which plan
@@ -146,7 +150,7 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
   // bookOnceOffVisit at ITN completion (see there), since payment is immediate anyway.
   const scheduledVisitDate =
     !isSubscriberPlan(input.plan) && input.paymentStatus === "booked"
-      ? toDateKey(addWorkingDays(nowInJohannesburg(), MIN_NOTICE_WORKING_DAYS))
+      ? toDateKey(addWorkingDays(now, MIN_NOTICE_WORKING_DAYS, workingDays))
       : null;
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls this after the zod schema has confirmed agreedToTerms === true.
@@ -301,7 +305,8 @@ export async function cancelSignup(id: string): Promise<void> {
  * (won't move an already-booked date on a retried ITN).
  */
 export async function bookOnceOffVisit(id: string): Promise<void> {
-  const firstVisitDate = toDateKey(addWorkingDays(nowInJohannesburg(), MIN_NOTICE_WORKING_DAYS));
+  const { workingDays } = await getAppSettings();
+  const firstVisitDate = toDateKey(addWorkingDays(nowInJohannesburg(), MIN_NOTICE_WORKING_DAYS, workingDays));
   await getPool().query(
     `update signups
      set scheduled_visit_date = coalesce(scheduled_visit_date, $2::date),
@@ -437,8 +442,9 @@ async function insertOrUpdateSkip(
 
 /** Records a "Can't do" on today's visit and bumps the customer to the next working day. */
 export async function recordSkippedVisit(signupId: string, reason: SkipReason): Promise<SkippedVisitRow> {
+  const { workingDays } = await getAppSettings();
   const originalDate = toDateKey(nowInJohannesburg());
-  const rescheduledDate = toDateKey(nextWorkingDay(nowInJohannesburg()));
+  const rescheduledDate = toDateKey(nextWorkingDay(nowInJohannesburg(), workingDays));
   return insertOrUpdateSkip(signupId, originalDate, reason, rescheduledDate);
 }
 
@@ -457,30 +463,109 @@ export async function recordMovedVisit(
 }
 
 /**
- * "Postpone today" - bulk-skips every customer still due today (not already done, not
- * already individually skipped/moved) to the next working day, reason 'rain'. A single
- * INSERT...SELECT rather than one query per customer; ON CONFLICT DO NOTHING leaves an
- * already-actioned row alone rather than overwriting a more specific reason.
+ * Bulk-skips every customer due on `dateKey` (not already done, not already individually
+ * skipped/moved) to `rescheduledKey`, with the given reason. A single INSERT...SELECT
+ * rather than one query per customer; ON CONFLICT DO NOTHING leaves an already-actioned
+ * row alone rather than overwriting a more specific reason. Shared by postponeAllToday
+ * ("Postpone today", reason 'rain') and blockDate (reason 'blocked').
  */
-export async function postponeAllToday(): Promise<number> {
-  const today = nowInJohannesburg();
-  const todayKey = toDateKey(today);
-  const rescheduledKey = toDateKey(nextWorkingDay(today));
-  const slot = candidateSlotForDate(today);
+async function bulkMoveVisitsForDate(
+  dateKey: string,
+  reason: SkipOrMoveReason,
+  rescheduledKey: string
+): Promise<number> {
+  const slot = candidateSlotForDate(new Date(`${dateKey}T00:00:00`));
   const { rows } = await getPool().query<{ signup_id: string }>(
     `insert into skipped_visits (signup_id, original_date, reason, rescheduled_date)
-     select s.id, $1::date, 'rain', $2::date
+     select s.id, $1::date, $3, $2::date
      from signups s
      where s.payment_status = 'active'
        and s.paused_at is null
-       and (($3::int is not null and s.service_slot = $3) or s.scheduled_visit_date = $1::date)
+       and (($4::int is not null and s.service_slot = $4) or s.scheduled_visit_date = $1::date)
        and not exists (select 1 from service_visits v where v.signup_id = s.id and v.service_date = $1::date)
        and not exists (select 1 from skipped_visits sv where sv.signup_id = s.id and sv.original_date = $1::date)
      on conflict (signup_id, original_date) do nothing
      returning signup_id`,
-    [todayKey, rescheduledKey, slot]
+    [dateKey, rescheduledKey, reason, slot]
   );
   return rows.length;
+}
+
+/** "Postpone today" - moves everyone still due today to the next working day, for rain. */
+export async function postponeAllToday(): Promise<number> {
+  const { workingDays } = await getAppSettings();
+  const today = nowInJohannesburg();
+  const todayKey = toDateKey(today);
+  const rescheduledKey = toDateKey(nextWorkingDay(today, workingDays));
+  return bulkMoveVisitsForDate(todayKey, "rain", rescheduledKey);
+}
+
+/**
+ * "Block a date" - marks it unavailable and moves everyone currently due on it to the
+ * next working day that isn't itself already blocked (rolling forward past adjacent
+ * holidays). A customer added later whose recurring slot lands on an already-blocked date
+ * isn't caught retroactively by this one-time action - the calendar flags blocked dates
+ * visually so the owner can re-block or move them individually if that happens.
+ */
+export async function blockDate(dateKey: string, label: string | null): Promise<number> {
+  await getPool().query(
+    `insert into blocked_dates (date, label) values ($1::date, $2)
+     on conflict (date) do update set label = excluded.label`,
+    [dateKey, label]
+  );
+
+  const { workingDays } = await getAppSettings();
+  const blocked = await getBlockedDateSet();
+  let candidate = nextWorkingDay(new Date(`${dateKey}T00:00:00`), workingDays);
+  while (blocked.has(toDateKey(candidate))) {
+    candidate = nextWorkingDay(candidate, workingDays);
+  }
+  return bulkMoveVisitsForDate(dateKey, BLOCKED_REASON, toDateKey(candidate));
+}
+
+export async function unblockDate(dateKey: string): Promise<void> {
+  await getPool().query("delete from blocked_dates where date = $1::date", [dateKey]);
+}
+
+export interface BlockedDate {
+  date: string;
+  label: string | null;
+}
+
+export async function getBlockedDates(): Promise<BlockedDate[]> {
+  const { rows } = await getPool().query<{ date: string; label: string | null }>(
+    "select date::text, label from blocked_dates order by date asc"
+  );
+  return rows;
+}
+
+async function getBlockedDateSet(): Promise<Set<string>> {
+  const dates = await getBlockedDates();
+  return new Set(dates.map((d) => d.date));
+}
+
+export interface AppSettings {
+  dailyVisitLimit: number;
+  workingDays: number[];
+}
+
+/** Singleton row, seeded by the schema migration - always exists. */
+export async function getAppSettings(): Promise<AppSettings> {
+  const { rows } = await getPool().query<{ daily_visit_limit: number; working_days: number[] }>(
+    "select daily_visit_limit, working_days from app_settings where id = true"
+  );
+  return { dailyVisitLimit: rows[0].daily_visit_limit, workingDays: rows[0].working_days };
+}
+
+export async function updateAppSettings(input: Partial<AppSettings>): Promise<AppSettings> {
+  const current = await getAppSettings();
+  const dailyVisitLimit = input.dailyVisitLimit ?? current.dailyVisitLimit;
+  const workingDays = input.workingDays ?? current.workingDays;
+  await getPool().query(
+    "update app_settings set daily_visit_limit = $1, working_days = $2 where id = true",
+    [dailyVisitLimit, workingDays]
+  );
+  return { dailyVisitLimit, workingDays };
 }
 
 /** For the ops Today list, to show an already-skipped row as skipped rather than actionable. */
@@ -888,12 +973,13 @@ export async function createManualSignup(input: ManualSignupInput): Promise<Sign
   const id = randomUUID();
   const now = nowInJohannesburg();
   const subscriber = isSubscriberPlan(input.plan);
+  const { workingDays } = await getAppSettings();
 
   const serviceSlot = subscriber
-    ? input.serviceSlot ?? (await pickLeastLoadedSlot(eligibleSlotsForNewSignup(now)))
+    ? input.serviceSlot ?? (await pickLeastLoadedSlot(eligibleSlotsForNewSignup(now, workingDays)))
     : null;
   const scheduledVisitDate = !subscriber
-    ? input.scheduledVisitDate ?? toDateKey(addWorkingDays(now, MIN_NOTICE_WORKING_DAYS))
+    ? input.scheduledVisitDate ?? toDateKey(addWorkingDays(now, MIN_NOTICE_WORKING_DAYS, workingDays))
     : null;
 
   const paymentStatus = input.paymentMethod === "payfast" ? "booked" : "active";
@@ -968,6 +1054,29 @@ export async function updateSignup(input: UpdateSignupInput): Promise<SignupRow 
   return rows[0] ?? null;
 }
 
+/**
+ * "Change a customer's service day... apply to all future visits" - a lighter-weight
+ * counterpart to updateSignup that touches only the schedule field, for the owner
+ * Customers tab and the calendar's per-customer day-change action. Only the field that's
+ * actually applicable to the customer's current plan is ever passed by callers, so a bare
+ * coalesce (update only what's provided) is safe - there's no case here where the other
+ * field needs to be explicitly cleared.
+ */
+export async function setServiceDay(
+  signupId: string,
+  serviceSlot: number | null | undefined,
+  scheduledVisitDate: string | null | undefined
+): Promise<void> {
+  await getPool().query(
+    `update signups set
+       service_slot = coalesce($2, service_slot),
+       scheduled_visit_date = coalesce($3::date, scheduled_visit_date),
+       updated_at = now()
+     where id = $1`,
+    [signupId, serviceSlot ?? null, scheduledVisitDate ?? null]
+  );
+}
+
 /** Only affects an 'active' row - pausing a booked/pending/cancelled customer has nothing to pause. */
 export async function pauseSignup(id: string): Promise<void> {
   await getPool().query(
@@ -1014,5 +1123,201 @@ export async function recordManualPayment(
      values ($1, $2, null, $3, coalesce($4::date::timestamptz, now()))`,
     [signupId, amount, method, receivedAt]
   );
+}
+
+/**
+ * Correctly attributes each active signup to the date(s) it's actually due on, given the
+ * given date range: a slot/scheduled-date match UNLESS that specific date has a
+ * skipped_visits row moving it away (original_date = that date), plus anyone moved onto
+ * that date from elsewhere (rescheduled_date = that date, regardless of whether their
+ * original date is in `dates` at all). This is what the Week view was missing before (it
+ * only checked the raw slot/date match, so a moved visit showed on its old day and never
+ * on its new one) - fixed here and reused by both the Week route and the owner calendar.
+ */
+/**
+ * node-postgres parses a `date` column into a real JS Date object even though SignupRow
+ * types it as `string | null` (every OTHER consumer of this field casts `::text` in SQL
+ * to sidestep this - getActiveVisitsForDates' `select *` doesn't, since its other callers
+ * never do a JS-level string comparison on it). Needed here because getVisitsGroupedByDate
+ * does. toDateKey's local-getter approach is timezone-safe regardless: node-postgres always
+ * constructs the Date via the local Date constructor from the stored y/m/d, so reading it
+ * back with local getters recovers the same y/m/d in any process timezone.
+ */
+export function asDateKey(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return toDateKey(value);
+  return value as string;
+}
+
+export async function getVisitsGroupedByDate(dates: string[]): Promise<Map<string, SignupRow[]>> {
+  const pool = await getActiveVisitsForDates(dates);
+  if (dates.length === 0 || pool.length === 0) return new Map(dates.map((d) => [d, []]));
+
+  const { rows: skipRows } = await getPool().query<{
+    signup_id: string;
+    original_date: string;
+    rescheduled_date: string;
+  }>(
+    `select signup_id, original_date::text, rescheduled_date::text
+     from skipped_visits
+     where original_date = any($1::date[]) or rescheduled_date = any($1::date[])`,
+    [dates]
+  );
+  const movedAway = new Map<string, Set<string>>();
+  const movedTo = new Map<string, Set<string>>();
+  for (const row of skipRows) {
+    if (!movedAway.has(row.signup_id)) movedAway.set(row.signup_id, new Set());
+    movedAway.get(row.signup_id)!.add(row.original_date);
+    if (!movedTo.has(row.signup_id)) movedTo.set(row.signup_id, new Set());
+    movedTo.get(row.signup_id)!.add(row.rescheduled_date);
+  }
+
+  const result = new Map<string, SignupRow[]>();
+  for (const dateKey of dates) {
+    const slot = candidateSlotForDate(new Date(`${dateKey}T00:00:00`));
+    const customers = pool.filter((s) => {
+      if (movedAway.get(s.id)?.has(dateKey)) return false;
+      if (movedTo.get(s.id)?.has(dateKey)) return true;
+      return (slot !== null && s.service_slot === slot) || asDateKey(s.scheduled_visit_date) === dateKey;
+    });
+    result.set(dateKey, customers);
+  }
+  return result;
+}
+
+export interface CalendarDay {
+  date: string;
+  count: number;
+  blocked: boolean;
+  blockedLabel: string | null;
+  customers: { id: string; fullName: string; houseNumber: string; plan: PlanId; block: number | null }[];
+}
+
+/** Owner-page month calendar - every scheduled visit in `year`-`month` (1-indexed), grouped by day. */
+export async function getCalendarMonth(year: number, month1indexed: number): Promise<CalendarDay[]> {
+  const daysInMonth = new Date(year, month1indexed, 0).getDate();
+  const dateKeys = Array.from({ length: daysInMonth }, (_, i) => toDateKey(new Date(year, month1indexed - 1, i + 1)));
+
+  const [grouped, blockedDates] = await Promise.all([getVisitsGroupedByDate(dateKeys), getBlockedDates()]);
+  const blockedByDate = new Map(blockedDates.map((b) => [b.date, b.label]));
+
+  return dateKeys.map((dateKey) => {
+    const customers = grouped.get(dateKey) ?? [];
+    return {
+      date: dateKey,
+      count: customers.length,
+      blocked: blockedByDate.has(dateKey),
+      blockedLabel: blockedByDate.get(dateKey) ?? null,
+      customers: customers.map((s) => ({
+        id: s.id,
+        fullName: s.full_name,
+        houseNumber: s.house_number,
+        plan: s.plan,
+        block: s.block,
+      })),
+    };
+  });
+}
+
+export interface SlotLoad {
+  slot: number;
+  count: number;
+}
+
+/** Active-subscriber count per recurring slot (1-14) - what Rebalance operates on. */
+export async function getSlotLoads(): Promise<SlotLoad[]> {
+  const { rows } = await getPool().query<{ slot: number; count: string }>(
+    `select gs as slot, count(s.id) as count
+     from generate_series(1, $1::int) as gs
+     left join signups s on s.service_slot = gs and s.payment_status = 'active' and s.paused_at is null
+     group by gs
+     order by gs`,
+    [SLOT_COUNT]
+  );
+  return rows.map((r) => ({ slot: r.slot, count: Number(r.count) }));
+}
+
+export interface RebalanceMove {
+  signupId: string;
+  fullName: string;
+  houseNumber: string;
+  fromSlot: number;
+  toSlot: number;
+}
+
+/**
+ * Proposes moving customers off slots over `limit` onto slots with room, until balanced
+ * or no more room is available. Slot reassignment (not a per-occurrence move) is what
+ * keeps each customer's two monthly visits ~14 days apart, since a slot's two visit days
+ * are always exactly 14 days apart by construction - moving a customer's slot moves both
+ * future visits together. Prefers moving the most recently added customers on an
+ * overloaded slot, on the theory that longer-standing customers are more disrupted by a
+ * changed service day. Read-only - see applyRebalance for actually committing this.
+ */
+export async function proposeRebalance(limit: number): Promise<RebalanceMove[]> {
+  const loads = await getSlotLoads();
+  const overloaded = loads.filter((l) => l.count > limit);
+  if (overloaded.length === 0) return [];
+
+  const underloaded = loads
+    .filter((l) => l.count < limit)
+    .map((l) => ({ slot: l.slot, room: limit - l.count }))
+    .sort((a, b) => b.room - a.room);
+
+  const { rows: candidates } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    service_slot: number;
+  }>(
+    `select id, full_name, house_number, service_slot
+     from signups
+     where payment_status = 'active' and paused_at is null
+       and service_slot = any($1::int[])
+     order by service_slot, created_at desc`,
+    [overloaded.map((l) => l.slot)]
+  );
+
+  const candidatesBySlot = new Map<number, typeof candidates>();
+  for (const c of candidates) {
+    if (!candidatesBySlot.has(c.service_slot)) candidatesBySlot.set(c.service_slot, []);
+    candidatesBySlot.get(c.service_slot)!.push(c);
+  }
+
+  const moves: RebalanceMove[] = [];
+  let underloadedIndex = 0;
+  for (const slot of overloaded) {
+    let toShed = slot.count - limit;
+    const pool = candidatesBySlot.get(slot.slot) ?? [];
+    for (const candidate of pool) {
+      if (toShed <= 0) break;
+      // Skip past any underloaded slot that's already been filled.
+      while (underloadedIndex < underloaded.length && underloaded[underloadedIndex].room <= 0) {
+        underloadedIndex++;
+      }
+      if (underloadedIndex >= underloaded.length) break; // no more room anywhere
+      const target = underloaded[underloadedIndex];
+      moves.push({
+        signupId: candidate.id,
+        fullName: candidate.full_name,
+        houseNumber: candidate.house_number,
+        fromSlot: slot.slot,
+        toSlot: target.slot,
+      });
+      target.room -= 1;
+      toShed -= 1;
+    }
+  }
+  return moves;
+}
+
+/** Commits a set of moves the owner accepted from proposeRebalance's preview. */
+export async function applyRebalance(moves: { signupId: string; toSlot: number }[]): Promise<void> {
+  for (const move of moves) {
+    await getPool().query(
+      "update signups set service_slot = $2, updated_at = now() where id = $1 and payment_status = 'active'",
+      [move.signupId, move.toSlot]
+    );
+  }
 }
 

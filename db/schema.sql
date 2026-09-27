@@ -119,6 +119,28 @@ alter table signups add column if not exists paused_at timestamptz;
 alter table payments add column if not exists method text not null default 'payfast'
   check (method in ('payfast', 'eft', 'cash'));
 
+-- Singleton settings row (the boolean PK plus its own value both being 'true' is what
+-- forces there to only ever be one row). working_days uses JS's Date.getDay() convention
+-- (0=Sunday .. 6=Saturday) so it drops straight into the existing day-of-week math.
+create table if not exists app_settings (
+  id boolean primary key default true,
+  daily_visit_limit integer not null default 7,
+  working_days integer[] not null default '{1,2,3,4,5}'
+);
+insert into app_settings (id, daily_visit_limit, working_days)
+  values (true, 7, '{1,2,3,4,5}')
+  on conflict (id) do nothing;
+
+-- A specific calendar date the business doesn't work (public holiday, owner's own
+-- commitment) - distinct from the weekly working_days pattern above. Blocking a date
+-- bulk-moves everyone currently due on it to the next working day (see blockDate in
+-- lib/db.ts) - this table is what makes that date show as blocked going forward.
+create table if not exists blocked_dates (
+  date date primary key,
+  label text,
+  created_at timestamptz not null default now()
+);
+
 -- This app never talks to Supabase's PostgREST API - it connects directly as the table
 -- owner (which always bypasses RLS, so none of this affects the app itself). These
 -- tables hold full customer PII and payment records, so RLS is enabled with zero

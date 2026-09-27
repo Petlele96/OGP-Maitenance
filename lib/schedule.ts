@@ -62,25 +62,29 @@ export function visitDaysForSlotInMonth(slot: number, date: Date): number[] {
 /** Minimum notice OGP commits to before a customer's first visit. */
 export const MIN_NOTICE_WORKING_DAYS = 3;
 
-function isWeekend(date: Date): boolean {
-  const day = date.getDay();
-  return day === 0 || day === 6;
+/** The default working-day set (Mon-Fri) - only used as a fallback; every real call site
+ * fetches the owner's actual setting via lib/db.ts's getAppSettings() first. */
+export const DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5];
+
+/** `workingDays` is JS's Date.getDay() convention: 0=Sunday .. 6=Saturday. */
+export function isWorkingDay(date: Date, workingDays: number[]): boolean {
+  return workingDays.includes(date.getDay());
 }
 
-/** Adds `n` working days (Mon-Fri) to `date` - weekends don't count toward `n`. */
-export function addWorkingDays(date: Date, n: number): Date {
+/** Adds `n` working days to `date`, per the owner's configured working-day set. */
+export function addWorkingDays(date: Date, n: number, workingDays: number[]): Date {
   const result = new Date(date);
   let added = 0;
   while (added < n) {
     result.setDate(result.getDate() + 1);
-    if (!isWeekend(result)) added++;
+    if (isWorkingDay(result, workingDays)) added++;
   }
   return result;
 }
 
-/** The next working day strictly after `date` (tomorrow, or Monday if that's a weekend). */
-export function nextWorkingDay(date: Date): Date {
-  return addWorkingDays(date, 1);
+/** The next working day strictly after `date`. */
+export function nextWorkingDay(date: Date, workingDays: number[]): Date {
+  return addWorkingDays(date, 1, workingDays);
 }
 
 /**
@@ -108,8 +112,8 @@ export function nextOccurrenceForSlot(slot: number, from: Date): Date {
  * today's or tomorrow's list). Compared as date keys, not raw timestamps, so `from`'s
  * time-of-day never causes an off-by-one against the midnight-normalised slot dates.
  */
-export function eligibleSlotsForNewSignup(from: Date): number[] {
-  const minDateKey = toDateKey(addWorkingDays(from, MIN_NOTICE_WORKING_DAYS));
+export function eligibleSlotsForNewSignup(from: Date, workingDays: number[]): number[] {
+  const minDateKey = toDateKey(addWorkingDays(from, MIN_NOTICE_WORKING_DAYS, workingDays));
   const allSlots = Array.from({ length: SLOT_COUNT }, (_, i) => i + 1);
   return allSlots.filter((slot) => toDateKey(nextOccurrenceForSlot(slot, from)) >= minDateKey);
 }
@@ -135,7 +139,9 @@ export type SkipReason = (typeof SKIP_REASONS)[number];
  * kept out of SKIP_REASONS/the "Can't do" reason picker, but stored in the same table and
  * type so it shows up in the same schedule/reporting queries. */
 export const MOVED_REASON = "moved" as const;
-export type SkipOrMoveReason = SkipReason | typeof MOVED_REASON;
+/** Bulk-moved because the owner blocked that specific date (public holiday, etc). */
+export const BLOCKED_REASON = "blocked" as const;
+export type SkipOrMoveReason = SkipReason | typeof MOVED_REASON | typeof BLOCKED_REASON;
 
 export function toDateKey(date: Date): string {
   const year = date.getFullYear();
