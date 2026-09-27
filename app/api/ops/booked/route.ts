@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
       ),
       paymentLinkSentAt: c.paymentLinkSentAt,
       paymentLinkExpired: c.paymentLinkSentAt !== null && isExpired,
+      notes: c.notes,
     };
   });
 

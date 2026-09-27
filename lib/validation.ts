@@ -31,3 +31,49 @@ export function normalizeCellNumber(value: string): string {
   if (digits.startsWith("27")) return `0${digits.slice(2)}`;
   return digits;
 }
+
+const DATE_KEY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Owner-page "Add customer manually". Service day is optional - a slot for subscriber
+ * plans, a calendar date for once-off - left blank to auto-assign the same way a web
+ * signup would. */
+export const manualSignupSchema = z.object({
+  fullName: z.string().trim().min(2, "Enter a full name").max(120),
+  houseNumber: z.string().trim().min(1, "Enter a house number").max(50),
+  whatsappNumber: z.string().trim().regex(SA_MOBILE_REGEX, "Enter a valid South African cell number"),
+  plan: z.enum(["monthly", "annual", "once-off"]),
+  paymentMethod: z.enum(["payfast", "eft", "cash"]),
+  block: z.number().int().min(MIN_BLOCK).max(MAX_BLOCK).nullable().optional(),
+  serviceSlot: z.number().int().min(1).max(14).nullable().optional(),
+  scheduledVisitDate: z.string().regex(DATE_KEY_REGEX).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+});
+
+/** Owner-page "Edit customer" - the form is always fully populated from the current
+ * record, so every field (bar signupId) is required, not partial: there's no ambiguity
+ * between "field omitted" and "field explicitly cleared to null". */
+export const updateSignupSchema = z.object({
+  signupId: z.string().uuid(),
+  fullName: z.string().trim().min(2, "Enter a full name").max(120),
+  houseNumber: z.string().trim().min(1, "Enter a house number").max(50),
+  whatsappNumber: z.string().trim().regex(SA_MOBILE_REGEX, "Enter a valid South African cell number"),
+  plan: z.enum(["monthly", "annual", "once-off"]),
+  paymentMethod: z.enum(["payfast", "eft", "cash"]),
+  block: z.number().int().min(MIN_BLOCK).max(MAX_BLOCK).nullable(),
+  serviceSlot: z.number().int().min(1).max(14).nullable(),
+  scheduledVisitDate: z.string().regex(DATE_KEY_REGEX).nullable(),
+  notes: z.string().max(2000).nullable(),
+});
+
+export const recordManualPaymentSchema = z.object({
+  signupId: z.string().uuid(),
+  amount: z.number().positive().max(100000),
+  method: z.enum(["eft", "cash"]),
+  receivedAt: z.string().regex(DATE_KEY_REGEX).nullable().optional(),
+});
+
+export const moveVisitSchema = z.object({
+  signupId: z.string().uuid(),
+  originalDate: z.string().regex(DATE_KEY_REGEX),
+  targetDate: z.string().regex(DATE_KEY_REGEX),
+});

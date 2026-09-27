@@ -100,6 +100,25 @@ create table if not exists skipped_visits (
 create index if not exists skipped_visits_signup_id_idx on skipped_visits (signup_id);
 create index if not exists skipped_visits_created_at_idx on skipped_visits (created_at);
 
+-- How the customer actually pays. 'payfast' is the default so every existing web signup
+-- backfills correctly without a data migration. EFT/cash customers are billed outside
+-- PayFast entirely - the owner records their payments manually (see payments.method below).
+alter table signups add column if not exists payment_method text not null default 'payfast'
+  check (payment_method in ('payfast', 'eft', 'cash'));
+
+-- Free text: gate code, dogs, where the tap is, anything else the operator needs on site.
+-- Editable only from /owner, shown read-only on /ops rows.
+alter table signups add column if not exists notes text;
+
+-- Set while a customer is temporarily paused (holiday, dispute, etc): they drop off the
+-- schedule and the unpaid-chase list without being cancelled. Null = not paused.
+alter table signups add column if not exists paused_at timestamptz;
+
+-- Mirrors signups.payment_method - lets "money in this month" and the payments list
+-- distinguish a PayFast ITN from a manually-recorded EFT/cash payment.
+alter table payments add column if not exists method text not null default 'payfast'
+  check (method in ('payfast', 'eft', 'cash'));
+
 -- This app never talks to Supabase's PostgREST API - it connects directly as the table
 -- owner (which always bypasses RLS, so none of this affects the app itself). These
 -- tables hold full customer PII and payment records, so RLS is enabled with zero

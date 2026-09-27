@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
     whatsappNumber: s.whatsapp_number,
     block: s.block,
     plan: s.plan,
+    notes: s.notes,
     done: visitBySignup.has(s.id),
     completedAt: visitBySignup.get(s.id)?.completed_at ?? null,
     skippedReason: skips.get(s.id)?.reason ?? null,

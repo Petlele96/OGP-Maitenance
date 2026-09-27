@@ -131,6 +131,12 @@ export function nextServiceDate(
 export const SKIP_REASONS = ["rain", "gate_locked", "dogs_loose", "customer_requested", "other"] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
+/** Deliberate reschedule to a chosen date (the "Move" action) - not an excuse, so it's
+ * kept out of SKIP_REASONS/the "Can't do" reason picker, but stored in the same table and
+ * type so it shows up in the same schedule/reporting queries. */
+export const MOVED_REASON = "moved" as const;
+export type SkipOrMoveReason = SkipReason | typeof MOVED_REASON;
+
 export function toDateKey(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");

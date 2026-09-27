@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
     whatsappNumber: s.whatsapp_number,
     block: s.block,
     plan: s.plan,
+    notes: s.notes,
   }));
 
   return NextResponse.json({

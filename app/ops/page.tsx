@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { buildReminderLink, buildFollowUpLink } from "@/lib/site";
 import type { PlanId } from "@/lib/plans";
-import { SKIP_REASONS, type SkipReason } from "@/lib/schedule";
+import { SKIP_REASONS, type SkipReason, type SkipOrMoveReason } from "@/lib/schedule";
 
 type ViewMode = "today" | "tomorrow" | "week" | "booked";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
@@ -20,9 +20,10 @@ interface TodayCustomer {
   whatsappNumber: string;
   block: number | null;
   plan: PlanId;
+  notes: string | null;
   done: boolean;
   completedAt: string | null;
-  skippedReason: SkipReason | null;
+  skippedReason: SkipOrMoveReason | null;
   skippedRescheduledDate: string | null;
 }
 
@@ -41,6 +42,7 @@ interface TomorrowCustomer {
   whatsappNumber: string;
   block: number | null;
   plan: PlanId;
+  notes: string | null;
 }
 
 interface TomorrowData {
@@ -64,6 +66,7 @@ interface BookedCustomer {
   serviceDayLabel: string;
   paymentLinkSentAt: string | null;
   paymentLinkExpired: boolean;
+  notes: string | null;
 }
 
 interface BookedData {
@@ -90,12 +93,13 @@ function planLabel(plan: PlanId): string {
   return "Once-off";
 }
 
-const SKIP_REASON_LABELS: Record<SkipReason, string> = {
+const SKIP_REASON_LABELS: Record<SkipOrMoveReason, string> = {
   rain: "Rain",
   gate_locked: "Gate locked",
   dogs_loose: "Dogs loose",
   customer_requested: "Customer requested",
   other: "Other",
+  moved: "Moved",
 };
 
 function formatShortDate(dateKey: string): string {
@@ -118,6 +122,10 @@ export default function OpsPage() {
   const [pickingReasonId, setPickingReasonId] = useState<string | null>(null);
   const [skippingId, setSkippingId] = useState<string | null>(null);
   const [sendingLinkId, setSendingLinkId] = useState<string | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
+  const [moveDate, setMoveDate] = useState("");
+  const [movingBusyId, setMovingBusyId] = useState<string | null>(null);
+  const [postponing, setPostponing] = useState(false);
 
   const loadToday = useCallback(async () => {
     const res = await fetch("/api/ops/today", { cache: "no-store" });
@@ -276,6 +284,31 @@ export default function OpsPage() {
     setSendingLinkId(null);
   }
 
+  async function handleMove(signupId: string, originalDate: string) {
+    if (!moveDate) return;
+    setMovingBusyId(signupId);
+    const res = await fetch("/api/ops/move", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signupId, originalDate, targetDate: moveDate }),
+    });
+    setMovingBusyId(null);
+    setMovingId(null);
+    setMoveDate("");
+    if (res.ok) {
+      if (today) await loadToday();
+      if (tomorrow) await loadTomorrow();
+    }
+  }
+
+  async function handlePostponeToday() {
+    if (!window.confirm("Move every remaining visit today to the next working day?")) return;
+    setPostponing(true);
+    await fetch("/api/ops/postpone-today", { method: "POST" });
+    setPostponing(false);
+    await loadToday();
+  }
+
   async function handleLogout() {
     await fetch("/api/ops/logout", { method: "POST" });
     setAuthState("unauthenticated");
@@ -368,6 +401,16 @@ export default function OpsPage() {
             <span className="text-sm"> remaining</span>
           </div>
 
+          {today.total - today.doneCount - today.skippedCount > 0 && (
+            <button
+              onClick={handlePostponeToday}
+              disabled={postponing}
+              className="mb-4 w-full rounded-xl border-2 border-brand-300 px-4 py-3 text-sm font-semibold text-brand-700 disabled:opacity-60"
+            >
+              {postponing ? "Postponing..." : "Postpone today (rain)"}
+            </button>
+          )}
+
           {today.total === 0 ? (
             <p className="mt-8 text-center text-sm text-brand-500">No visits scheduled for today.</p>
           ) : (
@@ -394,6 +437,7 @@ export default function OpsPage() {
                             <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
                               {c.whatsappNumber}
                             </a>
+                            {c.notes && <p className="mt-1 text-xs text-brand-500">{c.notes}</p>}
                           </div>
                           {c.done ? (
                             <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-sm font-semibold text-brand-700">
@@ -401,7 +445,7 @@ export default function OpsPage() {
                             </span>
                           ) : c.skippedReason ? (
                             <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-right text-xs font-semibold text-brand-700">
-                              Skipped: {SKIP_REASON_LABELS[c.skippedReason]}
+                              {c.skippedReason === "moved" ? "Moved" : `Skipped: ${SKIP_REASON_LABELS[c.skippedReason]}`}
                               {c.skippedRescheduledDate && (
                                 <>
                                   <br />→ {formatShortDate(c.skippedRescheduledDate)}
@@ -409,20 +453,28 @@ export default function OpsPage() {
                               )}
                             </span>
                           ) : (
-                            <div className="ml-3 flex shrink-0 gap-2">
+                            <div className="ml-3 flex shrink-0 flex-col items-end gap-2">
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => setPickingReasonId(c.id)}
+                                  disabled={completingId === c.id}
+                                  className="rounded-lg border-2 border-brand-300 px-3 py-3 text-sm font-semibold text-brand-700 disabled:opacity-60"
+                                >
+                                  Can&apos;t do
+                                </button>
+                                <button
+                                  onClick={() => handleDone(c.id)}
+                                  disabled={completingId === c.id}
+                                  className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                                >
+                                  Done
+                                </button>
+                              </div>
                               <button
-                                onClick={() => setPickingReasonId(c.id)}
-                                disabled={completingId === c.id}
-                                className="rounded-lg border-2 border-brand-300 px-3 py-3 text-sm font-semibold text-brand-700 disabled:opacity-60"
+                                onClick={() => setMovingId(c.id)}
+                                className="text-xs font-medium text-brand-500 underline"
                               >
-                                Can&apos;t do
-                              </button>
-                              <button
-                                onClick={() => handleDone(c.id)}
-                                disabled={completingId === c.id}
-                                className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                              >
-                                Done
+                                Move to a date
                               </button>
                             </div>
                           )}
@@ -442,6 +494,32 @@ export default function OpsPage() {
                             <button
                               onClick={() => setPickingReasonId(null)}
                               className="rounded-lg px-3 py-2 text-xs font-semibold text-brand-500 underline"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                        {movingId === c.id && (
+                          <div className="mt-3 flex items-center gap-2">
+                            <input
+                              type="date"
+                              value={moveDate}
+                              onChange={(e) => setMoveDate(e.target.value)}
+                              className="flex-1 rounded-lg border border-brand-200 px-2 py-2 text-sm text-brand-900"
+                            />
+                            <button
+                              onClick={() => handleMove(c.id, today.date)}
+                              disabled={!moveDate || movingBusyId === c.id}
+                              className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              onClick={() => {
+                                setMovingId(null);
+                                setMoveDate("");
+                              }}
+                              className="text-xs font-semibold text-brand-500 underline"
                             >
                               Cancel
                             </button>
@@ -485,24 +563,58 @@ export default function OpsPage() {
                   </h2>
                   <ul className="flex flex-col gap-3">
                     {group.customers.map((c) => (
-                      <li
-                        key={c.id}
-                        className="flex items-center justify-between rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100"
-                      >
-                        <div className="min-w-0">
-                          <p className="font-semibold text-brand-900">{c.fullName}</p>
-                          <p className="text-sm text-brand-700">
-                            House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
-                          </p>
+                      <li key={c.id} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+                        <div className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-brand-900">{c.fullName}</p>
+                            <p className="text-sm text-brand-700">
+                              House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
+                            </p>
+                            {c.notes && <p className="mt-1 text-xs text-brand-500">{c.notes}</p>}
+                          </div>
+                          <div className="ml-3 flex shrink-0 flex-col items-end gap-2">
+                            <a
+                              href={buildReminderLink(c.fullName, c.whatsappNumber)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white"
+                            >
+                              Remind
+                            </a>
+                            <button
+                              onClick={() => setMovingId(c.id)}
+                              className="text-xs font-medium text-brand-500 underline"
+                            >
+                              Move to a date
+                            </button>
+                          </div>
                         </div>
-                        <a
-                          href={buildReminderLink(c.fullName, c.whatsappNumber)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white"
-                        >
-                          Remind
-                        </a>
+                        {movingId === c.id && (
+                          <div className="mt-3 flex items-center gap-2">
+                            <input
+                              type="date"
+                              value={moveDate}
+                              onChange={(e) => setMoveDate(e.target.value)}
+                              className="flex-1 rounded-lg border border-brand-200 px-2 py-2 text-sm text-brand-900"
+                            />
+                            <button
+                              onClick={() => tomorrow && handleMove(c.id, tomorrow.date)}
+                              disabled={!moveDate || movingBusyId === c.id}
+                              className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              onClick={() => {
+                                setMovingId(null);
+                                setMoveDate("");
+                              }}
+                              className="text-xs font-semibold text-brand-500 underline"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -579,6 +691,7 @@ export default function OpsPage() {
                                 ? `Link sent ${formatShortDate(c.paymentLinkSentAt.slice(0, 10))}`
                                 : "No payment link sent yet"}
                           </p>
+                          {c.notes && <p className="mt-1 text-xs text-brand-500">{c.notes}</p>}
                         </div>
                         <button
                           onClick={() => handleSendPaymentLink(c.id)}

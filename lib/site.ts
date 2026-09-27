@@ -48,6 +48,17 @@ export function buildFollowUpLink(fullName: string, whatsappNumber: string): str
   return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
 }
 
+/** Sent from the owner dashboard's unpaid list, to chase a failed or overdue payment. */
+export function buildChaseMessage(fullName: string): string {
+  const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;
+  return `Hi ${firstName}, OGP Services here. We're following up on this month's payment for your yard service - could you let us know when we can expect it? Thank you.`;
+}
+
+export function buildChaseLink(fullName: string, whatsappNumber: string): string {
+  const message = buildChaseMessage(fullName);
+  return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
+}
+
 /** Sent from the owner dashboard once, right after a new signup goes active. */
 export function buildWelcomeMessage(fullName: string, serviceDayLabel: string): string {
   const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;

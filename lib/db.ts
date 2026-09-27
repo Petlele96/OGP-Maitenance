@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
-import { type PlanId, isSubscriberPlan } from "./plans";
+import { PLANS, type PlanId, isSubscriberPlan } from "./plans";
 import {
   toDateKey,
   visitDaysForSlotInMonth,
@@ -10,7 +10,9 @@ import {
   nextWorkingDay,
   nowInJohannesburg,
   MIN_NOTICE_WORKING_DAYS,
+  MOVED_REASON,
   type SkipReason,
+  type SkipOrMoveReason,
 } from "./schedule";
 
 /**
@@ -68,6 +70,9 @@ export interface SignupRow {
   payment_link_token: string | null;
   payment_link_expires_at: string | null;
   payment_link_sent_at: string | null;
+  payment_method: "payfast" | "eft" | "cash";
+  notes: string | null;
+  paused_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -360,6 +365,7 @@ export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRo
   const { rows } = await getPool().query<SignupRow>(
     `select * from signups
      where payment_status = 'active'
+       and paused_at is null
        and (
          service_slot = any($1::int[])
          or scheduled_visit_date = any($2::date[])
@@ -401,35 +407,85 @@ export interface SkippedVisitRow {
   id: string;
   signup_id: string;
   original_date: string;
-  reason: SkipReason;
+  reason: SkipOrMoveReason;
   rescheduled_date: string;
   created_at: string;
 }
 
 /**
- * Records a "Can't do" on today's visit and bumps the customer to the next working day -
- * a one-off extra date on top of their normal recurring slot (getActiveVisitsForDates
- * already treats any skipped_visits.rescheduled_date as a due date), so their regular
- * schedule for future months is untouched. Idempotent per signup/day: tapping "Can't do"
- * again the same day (e.g. to correct the reason) updates the existing row instead of
- * creating a duplicate.
+ * Shared by recordSkippedVisit ("Can't do", auto-rescheduled to the next working day) and
+ * recordMovedVisit ("Move", operator-chosen date) - both are "this visit didn't happen on
+ * its normal date, it happens on rescheduled_date instead, for this reason" rows in the
+ * same table. Idempotent per signup/day: acting again for the same original_date (e.g. to
+ * correct a reason or pick a different target date) updates the existing row.
  */
-export async function recordSkippedVisit(signupId: string, reason: SkipReason): Promise<SkippedVisitRow> {
-  const originalDate = toDateKey(nowInJohannesburg());
-  const rescheduledDate = toDateKey(nextWorkingDay(nowInJohannesburg()));
+async function insertOrUpdateSkip(
+  signupId: string,
+  originalDate: string,
+  reason: SkipOrMoveReason,
+  rescheduledDate: string
+): Promise<SkippedVisitRow> {
   const { rows } = await getPool().query<SkippedVisitRow>(
     `insert into skipped_visits (signup_id, original_date, reason, rescheduled_date)
      values ($1, $2::date, $3, $4::date)
-     on conflict (signup_id, original_date) do update set reason = excluded.reason
+     on conflict (signup_id, original_date) do update set reason = excluded.reason, rescheduled_date = excluded.rescheduled_date
      returning id, signup_id, original_date::text, reason, rescheduled_date::text, created_at`,
     [signupId, originalDate, reason, rescheduledDate]
   );
   return rows[0];
 }
 
+/** Records a "Can't do" on today's visit and bumps the customer to the next working day. */
+export async function recordSkippedVisit(signupId: string, reason: SkipReason): Promise<SkippedVisitRow> {
+  const originalDate = toDateKey(nowInJohannesburg());
+  const rescheduledDate = toDateKey(nextWorkingDay(nowInJohannesburg()));
+  return insertOrUpdateSkip(signupId, originalDate, reason, rescheduledDate);
+}
+
+/**
+ * "Move one visit to a specific date" - a deliberate reschedule (not an excuse), so it's
+ * recorded with MOVED_REASON rather than one of the "Can't do" reasons. `originalDate` is
+ * whichever due date the operator is moving (today's or tomorrow's), passed in by the
+ * caller rather than assumed to be today, since this action is available from both tabs.
+ */
+export async function recordMovedVisit(
+  signupId: string,
+  originalDate: string,
+  targetDate: string
+): Promise<SkippedVisitRow> {
+  return insertOrUpdateSkip(signupId, originalDate, MOVED_REASON, targetDate);
+}
+
+/**
+ * "Postpone today" - bulk-skips every customer still due today (not already done, not
+ * already individually skipped/moved) to the next working day, reason 'rain'. A single
+ * INSERT...SELECT rather than one query per customer; ON CONFLICT DO NOTHING leaves an
+ * already-actioned row alone rather than overwriting a more specific reason.
+ */
+export async function postponeAllToday(): Promise<number> {
+  const today = nowInJohannesburg();
+  const todayKey = toDateKey(today);
+  const rescheduledKey = toDateKey(nextWorkingDay(today));
+  const slot = candidateSlotForDate(today);
+  const { rows } = await getPool().query<{ signup_id: string }>(
+    `insert into skipped_visits (signup_id, original_date, reason, rescheduled_date)
+     select s.id, $1::date, 'rain', $2::date
+     from signups s
+     where s.payment_status = 'active'
+       and s.paused_at is null
+       and (($3::int is not null and s.service_slot = $3) or s.scheduled_visit_date = $1::date)
+       and not exists (select 1 from service_visits v where v.signup_id = s.id and v.service_date = $1::date)
+       and not exists (select 1 from skipped_visits sv where sv.signup_id = s.id and sv.original_date = $1::date)
+     on conflict (signup_id, original_date) do nothing
+     returning signup_id`,
+    [todayKey, rescheduledKey, slot]
+  );
+  return rows.length;
+}
+
 /** For the ops Today list, to show an already-skipped row as skipped rather than actionable. */
-export async function getSkipsForDate(date: string): Promise<Map<string, { reason: SkipReason; rescheduledDate: string }>> {
-  const { rows } = await getPool().query<{ signup_id: string; reason: SkipReason; rescheduled_date: string }>(
+export async function getSkipsForDate(date: string): Promise<Map<string, { reason: SkipOrMoveReason; rescheduledDate: string }>> {
+  const { rows } = await getPool().query<{ signup_id: string; reason: SkipOrMoveReason; rescheduled_date: string }>(
     "select signup_id, reason, rescheduled_date::text from skipped_visits where original_date = $1",
     [date]
   );
@@ -440,7 +496,7 @@ export interface SkippedVisitWithCustomer {
   id: string;
   fullName: string;
   houseNumber: string;
-  reason: SkipReason;
+  reason: SkipOrMoveReason;
   originalDate: string;
   rescheduledDate: string;
 }
@@ -451,7 +507,7 @@ export async function getSkippedVisitsThisMonth(): Promise<SkippedVisitWithCusto
     id: string;
     full_name: string;
     house_number: string;
-    reason: SkipReason;
+    reason: SkipOrMoveReason;
     original_date: string;
     rescheduled_date: string;
   }>(
@@ -494,11 +550,25 @@ export async function getOnceOffJobsThisMonth(): Promise<number> {
   return Number(rows[0].count);
 }
 
-export async function getRevenueThisMonth(): Promise<{ subscriber: number; onceOff: number; total: number }> {
-  const { rows } = await getPool().query<{ subscriber: string; once_off: string }>(
+export async function getRevenueThisMonth(): Promise<{
+  subscriber: number;
+  onceOff: number;
+  total: number;
+  byMethod: { payfast: number; eft: number; cash: number };
+}> {
+  const { rows } = await getPool().query<{
+    subscriber: string;
+    once_off: string;
+    payfast: string;
+    eft: string;
+    cash: string;
+  }>(
     `select
        coalesce(sum(p.amount) filter (where s.plan in ('monthly', 'annual')), 0) as subscriber,
-       coalesce(sum(p.amount) filter (where s.plan = 'once-off'), 0) as once_off
+       coalesce(sum(p.amount) filter (where s.plan = 'once-off'), 0) as once_off,
+       coalesce(sum(p.amount) filter (where p.method = 'payfast'), 0) as payfast,
+       coalesce(sum(p.amount) filter (where p.method = 'eft'), 0) as eft,
+       coalesce(sum(p.amount) filter (where p.method = 'cash'), 0) as cash
      from payments p
      join signups s on s.id = p.signup_id
      where p.received_at >= ${SAST_MONTH_START_SQL}
@@ -506,7 +576,12 @@ export async function getRevenueThisMonth(): Promise<{ subscriber: number; onceO
   );
   const subscriber = Number(rows[0].subscriber);
   const onceOff = Number(rows[0].once_off);
-  return { subscriber, onceOff, total: subscriber + onceOff };
+  return {
+    subscriber,
+    onceOff,
+    total: subscriber + onceOff,
+    byMethod: { payfast: Number(rows[0].payfast), eft: Number(rows[0].eft), cash: Number(rows[0].cash) },
+  };
 }
 
 export async function getCancellationsThisMonth(): Promise<number> {
@@ -578,6 +653,7 @@ export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCust
      from signups s
      left join payments p on p.signup_id = s.id
      where s.payment_status = 'active' and s.last_payment_failed_at is null
+       and s.paused_at is null
        and s.plan in ('monthly', 'annual')
      group by s.id`
   );
@@ -612,7 +688,7 @@ export async function getCompletionRateThisMonth(): Promise<{ done: number; sche
   // service_slot is null for once-off bookings - they've got no recurring schedule to
   // measure a completion rate against, so this stays scoped to subscribers.
   const { rows: slotRows } = await getPool().query<{ service_slot: number }>(
-    "select service_slot from signups where payment_status = 'active' and service_slot is not null"
+    "select service_slot from signups where payment_status = 'active' and paused_at is null and service_slot is not null"
   );
 
   let scheduled = 0;
@@ -690,6 +766,7 @@ export interface BookedCustomer {
   scheduledVisitDate: string | null;
   paymentLinkSentAt: string | null;
   paymentLinkExpiresAt: string | null;
+  notes: string | null;
 }
 
 /**
@@ -711,9 +788,10 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     scheduled_visit_date: string | null;
     payment_link_sent_at: string | null;
     payment_link_expires_at: string | null;
+    notes: string | null;
   }>(
     `select id, full_name, house_number, whatsapp_number, plan, block, service_slot,
-            scheduled_visit_date::text, payment_link_sent_at, payment_link_expires_at::text
+            scheduled_visit_date::text, payment_link_sent_at, payment_link_expires_at::text, notes
      from signups
      where payment_status = 'booked'
      order by created_at asc`
@@ -729,6 +807,212 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     scheduledVisitDate: r.scheduled_visit_date,
     paymentLinkSentAt: r.payment_link_sent_at,
     paymentLinkExpiresAt: r.payment_link_expires_at,
+    notes: r.notes,
   }));
+}
+
+export interface CustomerRow {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  plan: PlanId;
+  paymentStatus: SignupRow["payment_status"];
+  paymentMethod: SignupRow["payment_method"];
+  block: number | null;
+  serviceSlot: number | null;
+  scheduledVisitDate: string | null;
+  notes: string | null;
+  pausedAt: string | null;
+}
+
+/** Full roster for the owner "Customers" tab - search/filter happens client-side since
+ * the customer count is small; this always returns everyone regardless of status. */
+export async function getAllCustomers(): Promise<CustomerRow[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    plan: PlanId;
+    payment_status: SignupRow["payment_status"];
+    payment_method: SignupRow["payment_method"];
+    block: number | null;
+    service_slot: number | null;
+    scheduled_visit_date: string | null;
+    notes: string | null;
+    paused_at: string | null;
+  }>(
+    `select id, full_name, house_number, whatsapp_number, plan, payment_status, payment_method,
+            block, service_slot, scheduled_visit_date::text, notes, paused_at
+     from signups
+     order by created_at desc`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    plan: r.plan,
+    paymentStatus: r.payment_status,
+    paymentMethod: r.payment_method,
+    block: r.block,
+    serviceSlot: r.service_slot,
+    scheduledVisitDate: r.scheduled_visit_date,
+    notes: r.notes,
+    pausedAt: r.paused_at,
+  }));
+}
+
+export interface ManualSignupInput {
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  plan: PlanId;
+  paymentMethod: "payfast" | "eft" | "cash";
+  block: number | null;
+  serviceSlot: number | null;
+  scheduledVisitDate: string | null;
+  notes: string | null;
+}
+
+/**
+ * "Add customer manually" on the owner page - creates the row exactly like a web signup
+ * would (same slot/date defaulting when the owner leaves service day blank), except:
+ * paymentMethod 'payfast' lands as 'booked' (the existing ops "Send payment link" flow
+ * takes it from there), while 'eft'/'cash' land straight on 'active' - the owner is
+ * vouching that this customer already pays outside PayFast, so there's no payment step
+ * for the app to wait on.
+ */
+export async function createManualSignup(input: ManualSignupInput): Promise<SignupRow> {
+  const id = randomUUID();
+  const now = nowInJohannesburg();
+  const subscriber = isSubscriberPlan(input.plan);
+
+  const serviceSlot = subscriber
+    ? input.serviceSlot ?? (await pickLeastLoadedSlot(eligibleSlotsForNewSignup(now)))
+    : null;
+  const scheduledVisitDate = !subscriber
+    ? input.scheduledVisitDate ?? toDateKey(addWorkingDays(now, MIN_NOTICE_WORKING_DAYS))
+    : null;
+
+  const paymentStatus = input.paymentMethod === "payfast" ? "booked" : "active";
+  const startDate = paymentStatus === "active" ? toDateKey(now) : null;
+
+  const { rows } = await getPool().query<SignupRow>(
+    `insert into signups (
+       id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id,
+       service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date,
+       payment_method, notes, start_date
+     )
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12, $13, $14)
+     returning *`,
+    [
+      id,
+      input.fullName,
+      input.houseNumber,
+      input.whatsappNumber,
+      input.plan,
+      PLANS[input.plan].amount,
+      id,
+      serviceSlot,
+      input.block,
+      paymentStatus,
+      scheduledVisitDate,
+      input.paymentMethod,
+      input.notes,
+      startDate,
+    ]
+  );
+  return rows[0];
+}
+
+export interface UpdateSignupInput {
+  signupId: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  plan: PlanId;
+  paymentMethod: "payfast" | "eft" | "cash";
+  block: number | null;
+  serviceSlot: number | null;
+  scheduledVisitDate: string | null;
+  notes: string | null;
+}
+
+/** Owner-page "Edit customer" - always overwrites the full editable field set (see
+ * lib/validation.ts's updateSignupSchema for why this isn't a partial update). Amount is
+ * recomputed from the plan server-side, never trusted from the client. */
+export async function updateSignup(input: UpdateSignupInput): Promise<SignupRow | null> {
+  const { rows } = await getPool().query<SignupRow>(
+    `update signups set
+       full_name = $2, house_number = $3, whatsapp_number = $4, plan = $5, amount = $6,
+       payment_method = $7, block = $8, service_slot = $9, scheduled_visit_date = $10,
+       notes = $11, updated_at = now()
+     where id = $1
+     returning *`,
+    [
+      input.signupId,
+      input.fullName,
+      input.houseNumber,
+      input.whatsappNumber,
+      input.plan,
+      PLANS[input.plan].amount,
+      input.paymentMethod,
+      input.block,
+      input.serviceSlot,
+      input.scheduledVisitDate,
+      input.notes,
+    ]
+  );
+  return rows[0] ?? null;
+}
+
+/** Only affects an 'active' row - pausing a booked/pending/cancelled customer has nothing to pause. */
+export async function pauseSignup(id: string): Promise<void> {
+  await getPool().query(
+    "update signups set paused_at = now(), updated_at = now() where id = $1 and payment_status = 'active'",
+    [id]
+  );
+}
+
+export async function resumeSignup(id: string): Promise<void> {
+  await getPool().query(
+    "update signups set paused_at = null, updated_at = now() where id = $1",
+    [id]
+  );
+}
+
+/**
+ * Owner-initiated cancellation, from any non-cancelled state (active, booked, paused,
+ * pending, failed) - unlike cancelSignup (used only by the ITN handler, which deliberately
+ * stays scoped to 'active' rows so it never touches a booking mid-payment-link).
+ */
+export async function ownerCancelSignup(id: string): Promise<void> {
+  await getPool().query(
+    `update signups
+     set payment_status = 'cancelled', cancelled_at = now(), updated_at = now()
+     where id = $1 and payment_status <> 'cancelled'`,
+    [id]
+  );
+}
+
+/**
+ * "Record a payment" for an EFT/cash customer - a manual counterpart to recordPayment
+ * (the PayFast ITN path). pf_payment_id stays null (nothing to dedupe against; the owner
+ * only taps this once per real payment), method is always 'eft' or 'cash' so it's never
+ * confused with a real PayFast transaction in the revenue breakdown.
+ */
+export async function recordManualPayment(
+  signupId: string,
+  amount: number,
+  method: "eft" | "cash",
+  receivedAt: string | null
+): Promise<void> {
+  await getPool().query(
+    `insert into payments (signup_id, amount, pf_payment_id, method, received_at)
+     values ($1, $2, null, $3, coalesce($4::date::timestamptz, now()))`,
+    [signupId, amount, method, receivedAt]
+  );
 }
 
