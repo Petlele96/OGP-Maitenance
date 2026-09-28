@@ -27,7 +27,7 @@ interface FailedOrOverdue {
   houseNumber: string;
   whatsappNumber: string;
   daysLate: number;
-  status: "failed" | "overdue";
+  status: "failed" | "overdue" | "unpaid";
 }
 
 interface UnwelcomedCustomer {
@@ -383,7 +383,11 @@ export default function OwnerPage() {
                         <p className="text-sm text-brand-700">House {c.houseNumber}</p>
                       </button>
                       <span className="ml-3 shrink-0 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
-                        {c.status === "failed" ? "Failed" : `${c.daysLate} day${c.daysLate === 1 ? "" : "s"} overdue`}
+                        {c.status === "failed"
+                          ? "Failed"
+                          : c.status === "unpaid"
+                            ? "No payment recorded"
+                            : `${c.daysLate} day${c.daysLate === 1 ? "" : "s"} overdue`}
                       </span>
                     </div>
                     <a

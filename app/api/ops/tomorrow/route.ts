@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/ops-auth";
 import { toDateKey, nowInJohannesburg } from "@/lib/schedule";
-import { getActiveVisitsForDates } from "@/lib/db";
+import { getVisitsGroupedByDate } from "@/lib/db";
 import { groupByBlock } from "@/lib/sort";
 
 export const runtime = "nodejs";
 
-/** For the evening-before reminder round - no done-tracking, that only applies to today. */
+/**
+ * For the evening-before reminder round - no done-tracking, that only applies to today.
+ * Uses getVisitsGroupedByDate (not the raw signups pool) so a customer moved off
+ * tomorrow's date correctly disappears from this list, and anyone moved onto tomorrow
+ * correctly appears - a plain "who matches tomorrow's raw slot/date" query doesn't know
+ * about skipped_visits overrides either way.
+ */
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -14,7 +20,8 @@ export async function GET(req: NextRequest) {
   tomorrow.setDate(tomorrow.getDate() + 1);
   const dateKey = toDateKey(tomorrow);
 
-  const signups = await getActiveVisitsForDates([dateKey]);
+  const grouped = await getVisitsGroupedByDate([dateKey]);
+  const signups = grouped.get(dateKey) ?? [];
   const customers = signups.map((s) => ({
     id: s.id,
     fullName: s.full_name,

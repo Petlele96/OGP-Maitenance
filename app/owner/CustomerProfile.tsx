@@ -265,7 +265,8 @@ export default function CustomerProfile({
                 </form>
               )}
 
-              {data.customer.paymentStatus === "active" && !data.customer.pausedAt && (
+              {(data.customer.paymentStatus === "active" || data.customer.paymentStatus === "booked") &&
+                !data.customer.pausedAt && (
                 <div className="mt-4 rounded-xl bg-brand-50 p-3">
                   <p className="text-xs font-semibold text-brand-700">Move next visit</p>
                   <div className="mt-2 flex gap-2">
@@ -298,7 +299,8 @@ export default function CustomerProfile({
                 </div>
               )}
 
-              {data.customer.paymentMethod !== "payfast" && data.customer.paymentStatus === "active" && (
+              {data.customer.paymentMethod !== "payfast" &&
+                (data.customer.paymentStatus === "active" || data.customer.paymentStatus === "booked") && (
                 <div className="mt-4 rounded-xl bg-brand-50 p-3">
                   <p className="text-xs font-semibold text-brand-700">Record a payment received</p>
                   <div className="mt-2 flex gap-2">

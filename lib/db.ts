@@ -92,7 +92,7 @@ async function pickLeastLoadedSlot(eligibleSlots: number[]): Promise<number> {
   const { rows } = await getPool().query<{ slot: number; count: string }>(
     `select gs as slot, count(s.id) as count
      from unnest($1::int[]) as gs
-     left join signups s on s.service_slot = gs and s.payment_status = 'active'
+     left join signups s on s.service_slot = gs and s.payment_status in ('active', 'booked')
      group by gs
      order by count(s.id) asc, gs asc
      limit 1`,
@@ -351,15 +351,20 @@ export interface ServiceVisitRow {
 }
 
 /**
- * Active signups due on any of the given dates - subscribers via their recurring
- * service_slot (candidateSlotForDate), once-off bookings via their single
- * scheduled_visit_date, and anyone bumped onto one of these dates by a "Can't do" skip
- * (skipped_visits.rescheduled_date). These three never double-match the same row for the
- * same visit (a subscriber's scheduled_visit_date is always null, a once-off's
- * service_slot is always null, and a skip's rescheduled_date is a fresh one-off date), so
- * a customer appears at most once per date even though up to three conditions could
- * technically be true. Unordered - callers sort/group with lib/sort.ts (a plain SQL text
- * order misorders numeric house numbers).
+ * Signups due on any of the given dates - subscribers via their recurring service_slot
+ * (candidateSlotForDate), once-off bookings via their single scheduled_visit_date, and
+ * anyone bumped onto one of these dates by a "Can't do" skip (skipped_visits.rescheduled_date).
+ * These three never double-match the same row for the same visit (a subscriber's
+ * scheduled_visit_date is always null, a once-off's service_slot is always null, and a
+ * skip's rescheduled_date is a fresh one-off date), so a customer appears at most once per
+ * date even though up to three conditions could technically be true. Unordered - callers
+ * sort/group with lib/sort.ts (a plain SQL text order misorders numeric house numbers).
+ *
+ * Includes 'booked' alongside 'active' - a booked customer already has a real reserved day
+ * (assigned at booking time, same as anyone else), and payment confirmation has nothing to
+ * do with whether they should show up, be movable, or be markable done. Only 'pending' and
+ * 'failed' (an abandoned or unconfirmed signup attempt, not a real relationship yet) and
+ * 'cancelled' stay excluded.
  */
 export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRow[]> {
   if (dates.length === 0) return [];
@@ -372,7 +377,7 @@ export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRo
   );
   const { rows } = await getPool().query<SignupRow>(
     `select * from signups
-     where payment_status = 'active'
+     where payment_status in ('active', 'booked')
        and paused_at is null
        and (
          service_slot = any($1::int[])
@@ -482,7 +487,7 @@ async function bulkMoveVisitsForDate(
     `insert into skipped_visits (signup_id, original_date, reason, rescheduled_date)
      select s.id, $1::date, $3, $2::date
      from signups s
-     where s.payment_status = 'active'
+     where s.payment_status in ('active', 'booked')
        and s.paused_at is null
        and (($4::int is not null and s.service_slot = $4) or s.scheduled_visit_date = $1::date)
        and not exists (select 1 from service_visits v where v.signup_id = s.id and v.service_date = $1::date)
@@ -691,17 +696,27 @@ export interface FailedOrOverdueCustomer {
   houseNumber: string;
   whatsappNumber: string;
   daysLate: number;
-  status: "failed" | "overdue";
+  status: "failed" | "overdue" | "unpaid";
 }
 
 /**
- * Three sources, merged: signups whose *first* payment never went through (still
- * 'pending' -> 'failed'); active signups with a *recurring* charge that failed
+ * Four sources, merged: signups whose *first* payment never went through (still
+ * 'pending' -> 'failed'); active signups with a *recurring* PayFast charge that failed
  * (last_payment_failed_at set by the ITN handler - still 'active', still on the
- * schedule, just needs chasing); and active signups with no recent failure but whose
- * last successful payment is older than one billing period (no grace period). The
- * second and third groups are mutually exclusive by construction (WHERE clauses below)
- * so nobody is double-listed.
+ * schedule, just needs chasing); active EFT/cash customers who have never once had a
+ * payment recorded ('unpaid' - see below); and active signups (of any method) whose last
+ * *recorded* payment is older than one billing period (no grace period). Groups don't
+ * overlap by construction (WHERE clauses below) so nobody is double-listed.
+ *
+ * The 'unpaid' case matters because 'active' does not mean paid for a non-PayFast
+ * customer - createManualSignup marks EFT/cash customers active immediately, on the
+ * owner's word, with zero payment confirmation. Unlike PayFast (whose start_date is only
+ * ever set by a real completed charge - see activateSignup), an EFT/cash customer's
+ * start_date is set at creation regardless of whether any money has actually changed
+ * hands. Falling back to it as a "last payment" baseline would silently give them a full
+ * billing period of presumed-paid with nothing to back it up - so for that specific case
+ * (non-PayFast, zero rows ever in `payments`) there is no grace period at all: they show
+ * up as unpaid from day one, same as anyone else with literally no payment on record.
  */
 export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCustomer[]> {
   const pool = getPool();
@@ -737,21 +752,38 @@ export async function getFailedOrOverdueCustomers(): Promise<FailedOrOverdueCust
     house_number: string;
     whatsapp_number: string;
     plan: PlanId;
-    last_payment_at: string;
+    payment_method: SignupRow["payment_method"];
+    last_payment_at: string | null;
+    fallback_baseline: string;
   }>(
-    `select s.id, s.full_name, s.house_number, s.whatsapp_number, s.plan,
-            coalesce(max(p.received_at), s.start_date::timestamptz, s.created_at) as last_payment_at
+    `select s.id, s.full_name, s.house_number, s.whatsapp_number, s.plan, s.payment_method,
+            max(p.received_at) as last_payment_at,
+            coalesce(s.start_date::timestamptz, s.created_at) as fallback_baseline
      from signups s
      left join payments p on p.signup_id = s.id
      where s.payment_status = 'active' and s.last_payment_failed_at is null
        and s.paused_at is null
-       and s.plan in ('monthly', 'annual')
      group by s.id`
   );
 
   const overdue: FailedOrOverdueCustomer[] = [];
   for (const r of activeRows) {
-    const nextDue = new Date(r.last_payment_at);
+    if (r.last_payment_at === null && r.payment_method !== "payfast") {
+      overdue.push({
+        id: r.id,
+        fullName: r.full_name,
+        houseNumber: r.house_number,
+        whatsappNumber: r.whatsapp_number,
+        daysLate: Math.max(0, Math.floor((now - new Date(r.fallback_baseline).getTime()) / msPerDay)),
+        status: "unpaid",
+      });
+      continue;
+    }
+    // Once-off has no renewal cycle - nothing to be "overdue" on once it's paid (or is
+    // PayFast, which always records a payment via the ITN on completion).
+    if (r.plan === "once-off") continue;
+
+    const nextDue = new Date(r.last_payment_at ?? r.fallback_baseline);
     if (r.plan === "annual") nextDue.setFullYear(nextDue.getFullYear() + 1);
     else nextDue.setMonth(nextDue.getMonth() + 1);
 
@@ -779,7 +811,7 @@ export async function getCompletionRateThisMonth(): Promise<{ done: number; sche
   // service_slot is null for once-off bookings - they've got no recurring schedule to
   // measure a completion rate against, so this stays scoped to subscribers.
   const { rows: slotRows } = await getPool().query<{ service_slot: number }>(
-    "select service_slot from signups where payment_status = 'active' and paused_at is null and service_slot is not null"
+    "select service_slot from signups where payment_status in ('active', 'booked') and paused_at is null and service_slot is not null"
   );
 
   let scheduled = 0;
@@ -1233,12 +1265,13 @@ export interface SlotLoad {
   count: number;
 }
 
-/** Active-subscriber count per recurring slot (1-14) - what Rebalance operates on. */
+/** Active-or-booked count per recurring slot (1-14) - what Rebalance operates on. A booked
+ * customer already occupies a real day on that slot, same as an active one. */
 export async function getSlotLoads(): Promise<SlotLoad[]> {
   const { rows } = await getPool().query<{ slot: number; count: string }>(
     `select gs as slot, count(s.id) as count
      from generate_series(1, $1::int) as gs
-     left join signups s on s.service_slot = gs and s.payment_status = 'active' and s.paused_at is null
+     left join signups s on s.service_slot = gs and s.payment_status in ('active', 'booked') and s.paused_at is null
      group by gs
      order by gs`,
     [SLOT_COUNT]
@@ -1281,7 +1314,7 @@ export async function proposeRebalance(limit: number): Promise<RebalanceMove[]> 
   }>(
     `select id, full_name, house_number, service_slot
      from signups
-     where payment_status = 'active' and paused_at is null
+     where payment_status in ('active', 'booked') and paused_at is null
        and service_slot = any($1::int[])
      order by service_slot, created_at desc`,
     [overloaded.map((l) => l.slot)]
@@ -1324,7 +1357,7 @@ export async function proposeRebalance(limit: number): Promise<RebalanceMove[]> 
 export async function applyRebalance(moves: { signupId: string; toSlot: number }[]): Promise<void> {
   for (const move of moves) {
     await getPool().query(
-      "update signups set service_slot = $2, updated_at = now() where id = $1 and payment_status = 'active'",
+      "update signups set service_slot = $2, updated_at = now() where id = $1 and payment_status in ('active', 'booked')",
       [move.signupId, move.toSlot]
     );
   }
