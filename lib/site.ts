@@ -11,6 +11,11 @@ function toWhatsAppInternational(localNumber: string): string {
   return localNumber.replace(/^0/, "27");
 }
 
+/** Plain "open a chat" link, no pre-filled text - every tappable customer number in the app uses this. */
+export function buildWhatsAppChatLink(whatsappNumber: string): string {
+  return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}`;
+}
+
 /** "Monthly plan" / "Annual plan", but just "Once-off visit" - that label already reads fine alone. */
 export function planPhrase(id: PlanId): string {
   return id === "once-off" ? PLANS[id].label : `${PLANS[id].label} plan`;
@@ -59,14 +64,32 @@ export function buildChaseLink(fullName: string, whatsappNumber: string): string
   return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
 }
 
-/** Sent from the owner dashboard once, right after a new signup goes active. */
-export function buildWelcomeMessage(fullName: string, serviceDayLabel: string): string {
+/** Sent from the owner dashboard once, right after a new signup goes active - includes the
+ * customer's private tracking-page link (item 1 of the tracking build), sent this once
+ * rather than on every future contact. */
+export function buildWelcomeMessage(fullName: string, serviceDayLabel: string, trackingUrl: string): string {
   const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;
-  return `Hi ${firstName}, thanks for signing up with OGP Services. Your yard is scheduled for ${serviceDayLabel}. We'll WhatsApp you the day before each visit so you can unlock the gate and secure any dogs. Any questions, just reply here.`;
+  return `Hi ${firstName}, thanks for signing up with OGP Services. Your yard is scheduled for ${serviceDayLabel}. We'll WhatsApp you the day before each visit so you can unlock the gate and secure any dogs. You can check your service day and visit history anytime here: ${trackingUrl}\n\nAny questions, just reply here.`;
 }
 
-export function buildWelcomeLink(fullName: string, whatsappNumber: string, serviceDayLabel: string): string {
-  const message = buildWelcomeMessage(fullName, serviceDayLabel);
+export function buildWelcomeLink(
+  fullName: string,
+  whatsappNumber: string,
+  serviceDayLabel: string,
+  trackingUrl: string
+): string {
+  const message = buildWelcomeMessage(fullName, serviceDayLabel, trackingUrl);
+  return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
+}
+
+/** Sent after a visit is moved, from the ops list, the owner calendar, or the customer profile. */
+export function buildDateChangedMessage(fullName: string, newDateLabel: string): string {
+  const firstName = fullName.trim().split(/\s+/)[0] ?? fullName;
+  return `Hi ${firstName}, OGP Services here. Your yard is now booked for ${newDateLabel}.`;
+}
+
+export function buildDateChangedLink(fullName: string, whatsappNumber: string, newDateLabel: string): string {
+  const message = buildDateChangedMessage(fullName, newDateLabel);
   return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
 }
 

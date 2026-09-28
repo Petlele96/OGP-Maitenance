@@ -9,6 +9,7 @@ import {
   addWorkingDays,
   nextWorkingDay,
   nowInJohannesburg,
+  nextServiceDate,
   MIN_NOTICE_WORKING_DAYS,
   MOVED_REASON,
   BLOCKED_REASON,
@@ -75,6 +76,8 @@ export interface SignupRow {
   payment_method: "payfast" | "eft" | "cash";
   notes: string | null;
   paused_at: string | null;
+  tracking_token: string;
+  last_contacted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -579,6 +582,7 @@ export async function getSkipsForDate(date: string): Promise<Map<string, { reaso
 
 export interface SkippedVisitWithCustomer {
   id: string;
+  signupId: string;
   fullName: string;
   houseNumber: string;
   reason: SkipOrMoveReason;
@@ -590,13 +594,14 @@ export interface SkippedVisitWithCustomer {
 export async function getSkippedVisitsThisMonth(): Promise<SkippedVisitWithCustomer[]> {
   const { rows } = await getPool().query<{
     id: string;
+    signup_id: string;
     full_name: string;
     house_number: string;
     reason: SkipOrMoveReason;
     original_date: string;
     rescheduled_date: string;
   }>(
-    `select sv.id, s.full_name, s.house_number, sv.reason, sv.original_date::text, sv.rescheduled_date::text
+    `select sv.id, sv.signup_id, s.full_name, s.house_number, sv.reason, sv.original_date::text, sv.rescheduled_date::text
      from skipped_visits sv
      join signups s on s.id = sv.signup_id
      where sv.created_at >= ${SAST_MONTH_START_SQL}
@@ -605,6 +610,7 @@ export async function getSkippedVisitsThisMonth(): Promise<SkippedVisitWithCusto
   );
   return rows.map((r) => ({
     id: r.id,
+    signupId: r.signup_id,
     fullName: r.full_name,
     houseNumber: r.house_number,
     reason: r.reason,
@@ -799,6 +805,7 @@ export interface UnwelcomedCustomer {
   plan: PlanId;
   serviceSlot: number | null;
   scheduledVisitDate: string | null;
+  trackingToken: string;
 }
 
 /**
@@ -816,8 +823,9 @@ export async function getUnwelcomedCustomers(): Promise<UnwelcomedCustomer[]> {
     plan: PlanId;
     service_slot: number | null;
     scheduled_visit_date: string | null;
+    tracking_token: string;
   }>(
-    `select id, full_name, house_number, whatsapp_number, plan, service_slot, scheduled_visit_date::text
+    `select id, full_name, house_number, whatsapp_number, plan, service_slot, scheduled_visit_date::text, tracking_token
      from signups
      where payment_status = 'active' and welcomed_at is null
      order by created_at asc`
@@ -830,6 +838,7 @@ export async function getUnwelcomedCustomers(): Promise<UnwelcomedCustomer[]> {
     plan: r.plan,
     serviceSlot: r.service_slot,
     scheduledVisitDate: r.scheduled_visit_date,
+    trackingToken: r.tracking_token,
   }));
 }
 
@@ -1319,5 +1328,168 @@ export async function applyRebalance(moves: { signupId: string; toSlot: number }
       [move.signupId, move.toSlot]
     );
   }
+}
+
+/** Same row shape as getAllCustomers, filtered to one customer - backs the owner profile page. */
+export async function getCustomerDetail(id: string): Promise<CustomerRow | null> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    plan: PlanId;
+    payment_status: SignupRow["payment_status"];
+    payment_method: SignupRow["payment_method"];
+    block: number | null;
+    service_slot: number | null;
+    scheduled_visit_date: string | null;
+    notes: string | null;
+    paused_at: string | null;
+  }>(
+    `select id, full_name, house_number, whatsapp_number, plan, payment_status, payment_method,
+            block, service_slot, scheduled_visit_date::text, notes, paused_at
+     from signups where id = $1`,
+    [id]
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    plan: r.plan,
+    paymentStatus: r.payment_status,
+    paymentMethod: r.payment_method,
+    block: r.block,
+    serviceSlot: r.service_slot,
+    scheduledVisitDate: r.scheduled_visit_date,
+    notes: r.notes,
+    pausedAt: r.paused_at,
+  };
+}
+
+/** Public customer-tracking page (/track/[token]) looks a signup up by its unguessable token. */
+export async function getSignupByTrackingToken(token: string): Promise<SignupRow | null> {
+  const { rows } = await getPool().query<SignupRow>("select * from signups where tracking_token = $1 limit 1", [
+    token,
+  ]);
+  return rows[0] ?? null;
+}
+
+/** Dates the customer's yard was actually done - the public tracking page's visit history.
+ * Deliberately excludes skipped/moved reasons (those are internal ops detail, not
+ * something a customer-facing summary needs to show). */
+export async function getCompletedVisitDates(signupId: string): Promise<string[]> {
+  const { rows } = await getPool().query<{ date: string }>(
+    "select service_date::text as date from service_visits where signup_id = $1 order by service_date desc",
+    [signupId]
+  );
+  return rows.map((r) => r.date);
+}
+
+export interface CustomerHistoryEntry {
+  date: string;
+  status: "completed" | SkipOrMoveReason;
+  rescheduledDate: string | null;
+}
+
+/** Owner profile's "full visit history with dates and status" - completed visits plus
+ * every skip/move, merged into one timeline (internal-facing, unlike getCompletedVisitDates). */
+export async function getCustomerHistory(signupId: string): Promise<CustomerHistoryEntry[]> {
+  const [{ rows: visits }, { rows: skips }] = await Promise.all([
+    getPool().query<{ date: string }>(
+      "select service_date::text as date from service_visits where signup_id = $1",
+      [signupId]
+    ),
+    getPool().query<{ date: string; reason: SkipOrMoveReason; rescheduled_date: string }>(
+      "select original_date::text as date, reason, rescheduled_date::text from skipped_visits where signup_id = $1",
+      [signupId]
+    ),
+  ]);
+  const entries: CustomerHistoryEntry[] = [
+    ...visits.map((v) => ({ date: v.date, status: "completed" as const, rescheduledDate: null })),
+    ...skips.map((s) => ({ date: s.date, status: s.reason, rescheduledDate: s.rescheduled_date })),
+  ];
+  entries.sort((a, b) => b.date.localeCompare(a.date));
+  return entries;
+}
+
+export interface PaymentHistoryEntry {
+  amount: number;
+  method: "payfast" | "eft" | "cash";
+  receivedAt: string;
+}
+
+export async function getPaymentHistory(signupId: string): Promise<PaymentHistoryEntry[]> {
+  const { rows } = await getPool().query<{ amount: string; method: "payfast" | "eft" | "cash"; received_at: string }>(
+    "select amount, method, received_at from payments where signup_id = $1 order by received_at desc",
+    [signupId]
+  );
+  return rows.map((r) => ({ amount: Number(r.amount), method: r.method, receivedAt: r.received_at }));
+}
+
+/**
+ * nextServiceDate (lib/schedule.ts) is a pure function of the recurring slot/scheduled-date
+ * only - it has no idea a specific occurrence was ever moved. This follows that raw date
+ * through any chain of skipped_visits moves (original_date -> rescheduled_date) so "next
+ * service date" is correct after a move, not just before one. Capped at 5 hops as a safety
+ * net against a pathological cycle; a real chain of moves is never anywhere near that long.
+ */
+export async function getEffectiveNextServiceDate(
+  signupId: string,
+  signup: { service_slot: number | null; scheduled_visit_date: string | null },
+  from: Date
+): Promise<Date | null> {
+  const raw = nextServiceDate(signup, from);
+  if (!raw) return null;
+  let candidate = raw;
+  for (let i = 0; i < 5; i++) {
+    const key = toDateKey(candidate);
+    const { rows } = await getPool().query<{ rescheduled_date: string }>(
+      "select rescheduled_date::text from skipped_visits where signup_id = $1 and original_date = $2::date",
+      [signupId, key]
+    );
+    if (!rows[0]) break;
+    candidate = new Date(`${rows[0].rescheduled_date}T00:00:00`);
+  }
+  return candidate;
+}
+
+/** Sets last_contacted_at - called whenever any WhatsApp button fires from /ops or /owner. */
+export async function recordContact(signupId: string): Promise<void> {
+  await getPool().query("update signups set last_contacted_at = now() where id = $1", [signupId]);
+}
+
+export interface MessageCentreCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  lastContactedAt: string | null;
+}
+
+/** Message centre - every non-cancelled customer, oldest/never-contacted first, so the
+ * owner can see at a glance who they haven't spoken to. */
+export async function getMessageCentreList(): Promise<MessageCentreCustomer[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    last_contacted_at: string | null;
+  }>(
+    `select id, full_name, house_number, whatsapp_number, last_contacted_at
+     from signups
+     where payment_status <> 'cancelled'
+     order by last_contacted_at asc nulls first, full_name asc`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    lastContactedAt: r.last_contacted_at,
+  }));
 }
 

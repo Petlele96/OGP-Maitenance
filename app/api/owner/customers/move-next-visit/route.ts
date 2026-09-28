@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/owner-auth";
-import { getSignup, recordMovedVisit, asDateKey } from "@/lib/db";
+import { getSignup, recordMovedVisit, getEffectiveNextServiceDate, asDateKey } from "@/lib/db";
 import { moveNextVisitSchema } from "@/lib/validation";
-import { nextServiceDate, nowInJohannesburg, toDateKey } from "@/lib/schedule";
+import { nowInJohannesburg, toDateKey } from "@/lib/schedule";
 
 export const runtime = "nodejs";
 
@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
   const signup = await getSignup(parsed.data.signupId);
   if (!signup) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
 
-  const nextDate = nextServiceDate(
+  const nextDate = await getEffectiveNextServiceDate(
+    signup.id,
     { service_slot: signup.service_slot, scheduled_visit_date: asDateKey(signup.scheduled_visit_date) },
     nowInJohannesburg()
   );

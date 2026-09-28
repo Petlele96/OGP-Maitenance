@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { buildReminderLink, buildFollowUpLink } from "@/lib/site";
+import { buildReminderLink, buildFollowUpLink, buildWhatsAppChatLink, buildDateChangedLink } from "@/lib/site";
 import type { PlanId } from "@/lib/plans";
 import { SKIP_REASONS, type SkipReason, type SkipOrMoveReason } from "@/lib/schedule";
 
@@ -108,6 +108,14 @@ function formatShortDate(dateKey: string): string {
   return date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
 }
 
+function recordContact(signupId: string) {
+  fetch("/api/ops/contact", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ signupId }),
+  }).catch(() => {});
+}
+
 export default function OpsPage() {
   const [authState, setAuthState] = useState<AuthState>("checking");
   const [password, setPassword] = useState("");
@@ -127,6 +135,9 @@ export default function OpsPage() {
   const [moveDate, setMoveDate] = useState("");
   const [movingBusyId, setMovingBusyId] = useState<string | null>(null);
   const [postponing, setPostponing] = useState(false);
+  const [movedCustomer, setMovedCustomer] = useState<
+    { id: string; fullName: string; whatsappNumber: string; dateLabel: string } | null
+  >(null);
 
   const loadToday = useCallback(async () => {
     const res = await fetch("/api/ops/today", { cache: "no-store" });
@@ -267,6 +278,7 @@ export default function OpsPage() {
     if (res.ok) {
       const data = await res.json();
       if (waTab) waTab.location.href = data.whatsappLink;
+      recordContact(signupId);
       setBooked((prev) => {
         if (!prev) return prev;
         return {
@@ -285,21 +297,30 @@ export default function OpsPage() {
     setSendingLinkId(null);
   }
 
-  async function handleMove(signupId: string, originalDate: string) {
+  async function handleMove(
+    c: { id: string; fullName: string; whatsappNumber: string },
+    originalDate: string
+  ) {
     if (!moveDate) return;
-    setMovingBusyId(signupId);
+    setMovingBusyId(c.id);
     const res = await fetch("/api/ops/move", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ signupId, originalDate, targetDate: moveDate }),
+      body: JSON.stringify({ signupId: c.id, originalDate, targetDate: moveDate }),
     });
     setMovingBusyId(null);
     setMovingId(null);
-    setMoveDate("");
     if (res.ok) {
+      setMovedCustomer({
+        id: c.id,
+        fullName: c.fullName,
+        whatsappNumber: c.whatsappNumber,
+        dateLabel: formatShortDate(moveDate),
+      });
       if (today) await loadToday();
       if (tomorrow) await loadTomorrow();
     }
+    setMoveDate("");
   }
 
   async function handlePostponeToday() {
@@ -393,6 +414,29 @@ export default function OpsPage() {
         </button>
       </div>
 
+      {movedCustomer && (
+        <div className="mb-4 rounded-xl bg-brand-50 p-3 ring-1 ring-brand-100">
+          <p className="text-xs font-semibold text-brand-700">
+            Moved {movedCustomer.fullName} to {movedCustomer.dateLabel}
+          </p>
+          <a
+            href={buildDateChangedLink(movedCustomer.fullName, movedCustomer.whatsappNumber, movedCustomer.dateLabel)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => {
+              recordContact(movedCustomer.id);
+              setMovedCustomer(null);
+            }}
+            className="mt-2 block rounded-lg bg-brand-600 px-4 py-2 text-center text-sm font-semibold text-white"
+          >
+            Tell them on WhatsApp
+          </a>
+          <button onClick={() => setMovedCustomer(null)} className="mt-1 text-xs font-medium text-brand-500 underline">
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {view === "today" && today && (
         <>
           <div className="mb-4 rounded-xl bg-brand-500 px-4 py-3 text-center text-white shadow-sm">
@@ -435,7 +479,13 @@ export default function OpsPage() {
                             <p className="text-sm text-brand-700">
                               House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
                             </p>
-                            <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
+                            <a
+                              href={buildWhatsAppChatLink(c.whatsappNumber)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={() => recordContact(c.id)}
+                              className="text-sm text-brand-500 underline"
+                            >
                               {c.whatsappNumber}
                             </a>
                             {c.notes && <p className="mt-1 text-xs text-brand-500">{c.notes}</p>}
@@ -509,7 +559,7 @@ export default function OpsPage() {
                               className="flex-1 rounded-lg border border-brand-200 px-2 py-2 text-sm text-brand-900"
                             />
                             <button
-                              onClick={() => handleMove(c.id, today.date)}
+                              onClick={() => handleMove(c, today.date)}
                               disabled={!moveDate || movingBusyId === c.id}
                               className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
                             >
@@ -531,6 +581,7 @@ export default function OpsPage() {
                             href={buildFollowUpLink(c.fullName, c.whatsappNumber)}
                             target="_blank"
                             rel="noopener noreferrer"
+                            onClick={() => recordContact(c.id)}
                             className="mt-3 block rounded-lg border-2 border-brand-500 px-4 py-3 text-center text-sm font-semibold text-brand-700"
                           >
                             Follow up: offer monthly plan
@@ -578,6 +629,7 @@ export default function OpsPage() {
                               href={buildReminderLink(c.fullName, c.whatsappNumber)}
                               target="_blank"
                               rel="noopener noreferrer"
+                              onClick={() => recordContact(c.id)}
                               className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white"
                             >
                               Remind
@@ -599,7 +651,7 @@ export default function OpsPage() {
                               className="flex-1 rounded-lg border border-brand-200 px-2 py-2 text-sm text-brand-900"
                             />
                             <button
-                              onClick={() => tomorrow && handleMove(c.id, tomorrow.date)}
+                              onClick={() => tomorrow && handleMove(c, tomorrow.date)}
                               disabled={!moveDate || movingBusyId === c.id}
                               className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
                             >
@@ -681,7 +733,13 @@ export default function OpsPage() {
                           <p className="text-sm text-brand-700">
                             House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
                           </p>
-                          <a href={`tel:${c.whatsappNumber}`} className="text-sm text-brand-500 underline">
+                          <a
+                            href={buildWhatsAppChatLink(c.whatsappNumber)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => recordContact(c.id)}
+                            className="text-sm text-brand-500 underline"
+                          >
                             {c.whatsappNumber}
                           </a>
                           <p className="mt-1 text-xs text-brand-500">Service day: {c.serviceDayLabel}</p>

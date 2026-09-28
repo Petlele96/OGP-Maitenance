@@ -141,6 +141,18 @@ create table if not exists blocked_dates (
   created_at timestamptz not null default now()
 );
 
+-- Unique unguessable link for the public customer-tracking page (/track/[token]) - a
+-- random default backfills every existing row when this column is first added, and every
+-- new signup gets a fresh one automatically. Never rotated - the same link is sent once,
+-- in the welcome WhatsApp message, and stays valid for the life of the customer record.
+alter table signups add column if not exists tracking_token uuid not null default gen_random_uuid();
+create unique index if not exists signups_tracking_token_idx on signups (tracking_token);
+
+-- Set whenever any WhatsApp button fires from /ops or /owner (reminder, chase, welcome,
+-- payment link, tappable number, etc) - powers the owner's "who haven't I spoken to"
+-- message centre. Null means never contacted through the app.
+alter table signups add column if not exists last_contacted_at timestamptz;
+
 -- This app never talks to Supabase's PostgREST API - it connects directly as the table
 -- owner (which always bypasses RLS, so none of this affects the app itself). These
 -- tables hold full customer PII and payment records, so RLS is enabled with zero

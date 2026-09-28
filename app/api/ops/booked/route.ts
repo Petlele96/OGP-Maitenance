@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/ops-auth";
-import { getBookedCustomers } from "@/lib/db";
-import { nextServiceDate, nowInJohannesburg } from "@/lib/schedule";
+import { getBookedCustomers, getEffectiveNextServiceDate } from "@/lib/db";
+import { nowInJohannesburg } from "@/lib/schedule";
 import { groupByBlock } from "@/lib/sort";
 
 export const runtime = "nodejs";
@@ -17,23 +17,25 @@ export async function GET(req: NextRequest) {
   const booked = await getBookedCustomers();
   const now = nowInJohannesburg();
 
-  const customers = booked.map((c) => {
-    const isExpired = c.paymentLinkExpiresAt !== null && new Date(c.paymentLinkExpiresAt).getTime() < Date.now();
-    return {
-      id: c.id,
-      fullName: c.fullName,
-      houseNumber: c.houseNumber,
-      whatsappNumber: c.whatsappNumber,
-      plan: c.plan,
-      block: c.block,
-      serviceDayLabel: formatServiceDay(
-        nextServiceDate({ service_slot: c.serviceSlot, scheduled_visit_date: c.scheduledVisitDate }, now)
-      ),
-      paymentLinkSentAt: c.paymentLinkSentAt,
-      paymentLinkExpired: c.paymentLinkSentAt !== null && isExpired,
-      notes: c.notes,
-    };
-  });
+  const customers = await Promise.all(
+    booked.map(async (c) => {
+      const isExpired = c.paymentLinkExpiresAt !== null && new Date(c.paymentLinkExpiresAt).getTime() < Date.now();
+      return {
+        id: c.id,
+        fullName: c.fullName,
+        houseNumber: c.houseNumber,
+        whatsappNumber: c.whatsappNumber,
+        plan: c.plan,
+        block: c.block,
+        serviceDayLabel: formatServiceDay(
+          await getEffectiveNextServiceDate(c.id, { service_slot: c.serviceSlot, scheduled_visit_date: c.scheduledVisitDate }, now)
+        ),
+        paymentLinkSentAt: c.paymentLinkSentAt,
+        paymentLinkExpired: c.paymentLinkSentAt !== null && isExpired,
+        notes: c.notes,
+      };
+    })
+  );
 
   return NextResponse.json({
     total: customers.length,
