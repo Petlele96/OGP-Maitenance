@@ -6,6 +6,7 @@ import Link from "next/link";
 import { PLANS, type PlanId } from "@/lib/plans";
 import { ASK_QUESTION_LINK, COMPANY_NAME, COMPANY_REG, planPhrase } from "@/lib/site";
 import { SiteFooter } from "./components/SiteFooter";
+import { BeforeAfterShowcase } from "./components/BeforeAfterShowcase";
 
 const COVERAGE_ITEMS = [
   "Grass cut to an even height, front and back",
@@ -144,6 +145,9 @@ export default function SignupPage() {
           className="mt-8 h-auto w-full rounded-lg"
         />
       </header>
+
+      {/* 1b. Before & after */}
+      <BeforeAfterShowcase />
 
       {/* 2. What R200 covers */}
       <section className="border-t border-navy/10 py-24">
