@@ -164,3 +164,12 @@ export function getWeekDates(date: Date): Date[] {
     return d;
   });
 }
+
+/** A day confirmed more than this many days after its service date is marked "confirmed late" - informational only, never blocks or warns. */
+export const LATE_CONFIRMATION_DAYS = 2;
+
+/** Both arguments are 'YYYY-MM-DD' Johannesburg calendar dates. */
+export function isConfirmedLate(serviceDate: string, confirmedDate: string): boolean {
+  const days = (Date.parse(`${confirmedDate}T00:00:00Z`) - Date.parse(`${serviceDate}T00:00:00Z`)) / 86400000;
+  return days > LATE_CONFIRMATION_DAYS;
+}

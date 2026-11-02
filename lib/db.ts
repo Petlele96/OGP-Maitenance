@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { PLANS, type PlanId, isSubscriberPlan } from "./plans";
+import { groupByBlock } from "./sort";
 import {
   toDateKey,
   visitDaysForSlotInMonth,
@@ -404,16 +405,245 @@ export async function getVisitsForDates(dates: string[]): Promise<ServiceVisitRo
   return rows;
 }
 
-/** Idempotent: tapping Done twice for the same customer/day returns the original completed_at. */
-export async function markVisitDone(signupId: string, date: string): Promise<ServiceVisitRow> {
-  const { rows } = await getPool().query<ServiceVisitRow>(
-    `insert into service_visits (signup_id, service_date)
-     values ($1, $2)
-     on conflict (signup_id, service_date) do update set signup_id = excluded.signup_id
-     returning signup_id, service_date::text, completed_at`,
-    [signupId, date]
+export type YardStatus = "done" | "not_done" | "pending";
+
+export interface DayYard {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  block: number | null;
+  plan: PlanId;
+  notes: string | null;
+  /** 'pending' = nothing recorded yet - treated as "assume done" until the day is confirmed. */
+  status: YardStatus;
+  completedAt: string | null;
+  reason: SkipOrMoveReason | null;
+  rescheduledDate: string | null;
+}
+
+export interface DayConfirmation {
+  confirmedAt: string;
+  /** confirmed_at as a Johannesburg calendar date, for the "confirmed late" comparison. */
+  confirmedDate: string;
+  crew: string | null;
+  /** True once the day has been reopened for correction - it's outstanding again until re-confirmed. */
+  reopened: boolean;
+}
+
+interface RoutePoolRow {
+  id: string;
+  full_name: string;
+  house_number: string;
+  whatsapp_number: string;
+  block: number | null;
+  plan: PlanId;
+  notes: string | null;
+  payment_status: SignupRow["payment_status"];
+  service_slot: number | null;
+  scheduled_visit_date: string | null;
+  created_date: string;
+  paused_date: string | null;
+  cancelled_date: string | null;
+}
+
+/**
+ * Who was (or is) on the route for each of `dates`, past or present. The schedule is computed
+ * from slots rather than stored, so a past day has to be reconstructed from today's customer
+ * data - bounded so a customer can't appear on days before they existed (created_at, NOT the
+ * payment date: booked customers get serviced before they pay), after they cancelled, or from
+ * the day they were paused. Anything with a real record on that date (a completion or a
+ * skip/move away) is always included, whatever those bounds say, so history is never hidden.
+ * A yard moved away from a date stays on that date as 'not_done' (that's the audit trail),
+ * and shows as a normal pending yard on the date it was moved to.
+ */
+export async function getRoutesForDates(dates: string[]): Promise<Map<string, DayYard[]>> {
+  const result = new Map<string, DayYard[]>(dates.map((d) => [d, []]));
+  if (dates.length === 0) return result;
+
+  const pool = getPool();
+  const [{ rows: signups }, { rows: skips }, { rows: visits }] = await Promise.all([
+    pool.query<RoutePoolRow>(
+      `select id, full_name, house_number, whatsapp_number, block, plan, notes, payment_status,
+              service_slot, scheduled_visit_date::text,
+              (created_at at time zone 'Africa/Johannesburg')::date::text as created_date,
+              (paused_at at time zone 'Africa/Johannesburg')::date::text as paused_date,
+              (cancelled_at at time zone 'Africa/Johannesburg')::date::text as cancelled_date
+       from signups
+       where payment_status in ('active', 'booked', 'cancelled')`
+    ),
+    pool.query<{ signup_id: string; original_date: string; reason: SkipOrMoveReason; rescheduled_date: string }>(
+      `select signup_id, original_date::text, reason, rescheduled_date::text
+       from skipped_visits
+       where original_date = any($1::date[]) or rescheduled_date = any($1::date[])`,
+      [dates]
+    ),
+    pool.query<{ signup_id: string; service_date: string; completed_at: string }>(
+      "select signup_id, service_date::text, completed_at from service_visits where service_date = any($1::date[])",
+      [dates]
+    ),
+  ]);
+
+  const skipByKey = new Map(skips.map((k) => [`${k.signup_id}|${k.original_date}`, k]));
+  const movedOnto = new Set(skips.map((k) => `${k.signup_id}|${k.rescheduled_date}`));
+  const visitByKey = new Map(visits.map((v) => [`${v.signup_id}|${v.service_date}`, v]));
+
+  for (const date of dates) {
+    const slot = candidateSlotForDate(new Date(`${date}T00:00:00`));
+    const yards = result.get(date)!;
+    for (const s of signups) {
+      const key = `${s.id}|${date}`;
+      const visit = visitByKey.get(key);
+      const skip = skipByKey.get(key);
+      if (!visit && !skip) {
+        const eligible =
+          s.created_date <= date &&
+          (s.paused_date === null || s.paused_date > date) &&
+          (s.payment_status !== "cancelled" || (s.cancelled_date !== null && s.cancelled_date > date));
+        const due = (slot !== null && s.service_slot === slot) || s.scheduled_visit_date === date || movedOnto.has(key);
+        if (!eligible || !due) continue;
+      }
+      yards.push({
+        id: s.id,
+        fullName: s.full_name,
+        houseNumber: s.house_number,
+        whatsappNumber: s.whatsapp_number,
+        block: s.block,
+        plan: s.plan,
+        notes: s.notes,
+        status: visit ? "done" : skip ? "not_done" : "pending",
+        completedAt: visit?.completed_at ?? null,
+        reason: !visit && skip ? skip.reason : null,
+        rescheduledDate: !visit && skip ? skip.rescheduled_date : null,
+      });
+    }
+  }
+  return result;
+}
+
+export async function getDayConfirmations(dates: string[]): Promise<Map<string, DayConfirmation>> {
+  if (dates.length === 0) return new Map();
+  const { rows } = await getPool().query<{
+    service_date: string;
+    confirmed_at: string;
+    confirmed_date: string;
+    crew: string | null;
+    reopened_at: string | null;
+  }>(
+    `select service_date::text, confirmed_at,
+            (confirmed_at at time zone 'Africa/Johannesburg')::date::text as confirmed_date,
+            crew, reopened_at
+     from day_confirmations
+     where service_date = any($1::date[])`,
+    [dates]
   );
-  return rows[0];
+  return new Map(
+    rows.map((r) => [
+      r.service_date,
+      { confirmedAt: r.confirmed_at, confirmedDate: r.confirmed_date, crew: r.crew, reopened: r.reopened_at !== null },
+    ])
+  );
+}
+
+/** One day's route as a single list in service order (block, then house number). */
+export async function getDayRoute(dateKey: string): Promise<{ yards: DayYard[]; confirmation: DayConfirmation | null }> {
+  const [routes, confirmations] = await Promise.all([getRoutesForDates([dateKey]), getDayConfirmations([dateKey])]);
+  const yards = groupByBlock(routes.get(dateKey) ?? []).flatMap((g) => g.customers);
+  return { yards, confirmation: confirmations.get(dateKey) ?? null };
+}
+
+/**
+ * "Confirm day": every yard not flagged gets a completion record carrying the service date, the
+ * confirmation time and the crew. Never touches yards already flagged not-done. Confirming again
+ * after a reopen is fine - existing completion rows are left alone and confirmed_at stays the
+ * ORIGINAL confirmation time.
+ */
+export async function confirmDay(dateKey: string, crew: string | null): Promise<void> {
+  const { yards } = await getDayRoute(dateKey);
+  const pendingIds = yards.filter((y) => y.status === "pending").map((y) => y.id);
+  if (pendingIds.length > 0) {
+    await getPool().query(
+      `insert into service_visits (signup_id, service_date, confirmed_at, crew)
+       select unnest($1::uuid[]), $2::date, now(), $3
+       on conflict (signup_id, service_date) do nothing`,
+      [pendingIds, dateKey, crew]
+    );
+  }
+  await getPool().query(
+    `insert into day_confirmations (service_date, crew)
+     values ($1::date, $2)
+     on conflict (service_date) do update
+       set crew = coalesce(excluded.crew, day_confirmations.crew), reopened_at = null, updated_at = now()`,
+    [dateKey, crew]
+  );
+}
+
+/** Opens a confirmed day back up for correction. No time limit - any day can be reopened, ever. */
+export async function reopenDay(dateKey: string): Promise<void> {
+  await getPool().query(
+    "update day_confirmations set reopened_at = now(), updated_at = now() where service_date = $1::date and reopened_at is null",
+    [dateKey]
+  );
+}
+
+/** Undo a "not done" flag: removes the skip, so the yard goes back to being assumed done on that day. */
+export async function unflagNotDone(signupId: string, dateKey: string): Promise<void> {
+  await getPool().query("delete from skipped_visits where signup_id = $1 and original_date = $2::date", [
+    signupId,
+    dateKey,
+  ]);
+}
+
+export interface OutstandingDay {
+  date: string;
+  yardCount: number;
+  notDoneCount: number;
+  reopened: boolean;
+}
+
+/**
+ * Every past day with yards on its route that nobody has confirmed (or that was reopened and not
+ * re-confirmed), oldest first. Today is excluded - it's still in progress - but becomes outstanding
+ * tomorrow if left. Nothing is ever auto-confirmed: an unconfirmed day stays on this list until a
+ * person confirms it, however old it gets (lookback is capped at a year to bound the query).
+ */
+export async function getOutstandingDays(): Promise<OutstandingDay[]> {
+  const { rows } = await getPool().query<{ first_date: string | null }>(
+    `select min((created_at at time zone 'Africa/Johannesburg')::date)::text as first_date
+     from signups where payment_status in ('active', 'booked', 'cancelled')`
+  );
+  const first = rows[0]?.first_date;
+  if (!first) return [];
+
+  const yesterday = nowInJohannesburg();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const lastKey = toDateKey(yesterday);
+  const earliest = new Date(yesterday);
+  earliest.setDate(earliest.getDate() - 365);
+  const cursor = new Date(`${first}T00:00:00`);
+  if (toDateKey(cursor) < toDateKey(earliest)) cursor.setTime(earliest.getTime());
+
+  const dates: string[] = [];
+  while (toDateKey(cursor) <= lastKey) {
+    dates.push(toDateKey(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const [routes, confirmations] = await Promise.all([getRoutesForDates(dates), getDayConfirmations(dates)]);
+  const outstanding: OutstandingDay[] = [];
+  for (const date of dates) {
+    const yards = routes.get(date) ?? [];
+    if (yards.length === 0) continue;
+    const confirmation = confirmations.get(date);
+    if (confirmation && !confirmation.reopened) continue;
+    outstanding.push({
+      date,
+      yardCount: yards.length,
+      notDoneCount: yards.filter((y) => y.status === "not_done").length,
+      reopened: confirmation?.reopened ?? false,
+    });
+  }
+  return outstanding;
 }
 
 export interface SkippedVisitRow {
@@ -448,11 +678,26 @@ async function insertOrUpdateSkip(
   return rows[0];
 }
 
-/** Records a "Can't do" on today's visit and bumps the customer to the next working day. */
-export async function recordSkippedVisit(signupId: string, reason: SkipReason): Promise<SkippedVisitRow> {
+/**
+ * Flags a yard "not done" on `serviceDate` (default today) and bumps it to the next working day
+ * after today - for a past day that's still forward-looking, since the work now needs doing.
+ * A yard can't be both done and not done on one day, so flagging replaces any completion record
+ * (which is what makes correcting a confirmed day work).
+ */
+export async function recordSkippedVisit(
+  signupId: string,
+  reason: SkipReason,
+  serviceDate?: string
+): Promise<SkippedVisitRow> {
   const { workingDays } = await getAppSettings();
-  const originalDate = toDateKey(nowInJohannesburg());
-  const rescheduledDate = toDateKey(nextWorkingDay(nowInJohannesburg(), workingDays));
+  const today = nowInJohannesburg();
+  const originalDate = serviceDate ?? toDateKey(today);
+  const from = originalDate > toDateKey(today) ? new Date(`${originalDate}T00:00:00`) : today;
+  const rescheduledDate = toDateKey(nextWorkingDay(from, workingDays));
+  await getPool().query("delete from service_visits where signup_id = $1 and service_date = $2::date", [
+    signupId,
+    originalDate,
+  ]);
   return insertOrUpdateSkip(signupId, originalDate, reason, rescheduledDate);
 }
 
@@ -467,6 +712,11 @@ export async function recordMovedVisit(
   originalDate: string,
   targetDate: string
 ): Promise<SkippedVisitRow> {
+  // Same rule as flagging not-done: a yard can't be both done and moved on the same day.
+  await getPool().query("delete from service_visits where signup_id = $1 and service_date = $2::date", [
+    signupId,
+    originalDate,
+  ]);
   return insertOrUpdateSkip(signupId, originalDate, MOVED_REASON, targetDate);
 }
 

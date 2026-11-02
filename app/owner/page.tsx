@@ -73,6 +73,7 @@ interface DashboardData {
   completion: { done: number; scheduled: number };
   unwelcomedCustomers: UnwelcomedCustomer[];
   skippedVisits: SkippedVisit[];
+  outstandingDays: number;
   bookedCount: number;
   bookedCustomers: BookedCustomer[];
 }
@@ -337,6 +338,21 @@ export default function OwnerPage() {
             <p className="text-xs font-medium text-brand-500">Booked, awaiting payment</p>
             <p className="mt-1 text-2xl font-bold text-brand-900">{data.bookedCount}</p>
           </div>
+
+          <a
+            href="/ops"
+            className={`block rounded-2xl p-4 shadow-sm ring-1 ${
+              data.outstandingDays > 0 ? "bg-white ring-brand-300" : "bg-white ring-brand-100"
+            }`}
+          >
+            <p className="text-xs font-medium text-brand-500">Outstanding days</p>
+            <p className="mt-1 text-2xl font-bold text-brand-900">{data.outstandingDays}</p>
+            <p className="mt-0.5 text-xs text-brand-600">
+              {data.outstandingDays === 0
+                ? "Every past day has been confirmed."
+                : "unconfirmed - clear them from the Outstanding tab on the operations page"}
+            </p>
+          </a>
 
           <div className="rounded-2xl bg-brand-600 p-4 shadow-sm">
             <p className="text-xs font-medium text-brand-100">Money in this month</p>

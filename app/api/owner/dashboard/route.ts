@@ -11,6 +11,7 @@ import {
   getSkippedVisitsThisMonth,
   getBookedCustomers,
   getEffectiveNextServiceDate,
+  getOutstandingDays,
 } from "@/lib/db";
 import { nowInJohannesburg } from "@/lib/schedule";
 
@@ -40,6 +41,7 @@ export async function GET(req: NextRequest) {
     unwelcomedCustomers,
     skippedVisits,
     bookedCustomers,
+    outstandingDays,
   ] = await Promise.all([
     getActiveCustomerCounts(),
     getOnceOffJobsThisMonth(),
@@ -50,6 +52,7 @@ export async function GET(req: NextRequest) {
     getUnwelcomedCustomers(),
     getSkippedVisitsThisMonth(),
     getBookedCustomers(),
+    getOutstandingDays(),
   ]);
 
   const now = nowInJohannesburg();
@@ -95,6 +98,7 @@ export async function GET(req: NextRequest) {
     completion,
     unwelcomedCustomers: unwelcomed,
     skippedVisits,
+    outstandingDays: outstandingDays.length,
     bookedCount: bookedCustomers.length,
     bookedCustomers: booked,
   });

@@ -153,6 +153,23 @@ create unique index if not exists signups_tracking_token_idx on signups (trackin
 -- message centre. Null means never contacted through the app.
 alter table signups add column if not exists last_contacted_at timestamptz;
 
+-- Day confirmation: the worker confirms a whole day's route in one tap instead of marking
+-- each yard. service_visits keeps one row per completed yard (service_date = the day the work
+-- was scheduled) and now also records when it was confirmed and by which crew.
+alter table service_visits add column if not exists confirmed_at timestamptz;
+alter table service_visits add column if not exists crew text;
+
+-- One row per confirmed day. confirmed_at is the FIRST confirmation and is never overwritten, so
+-- reopening and correcting a day later doesn't turn an on-time confirmation into a late one.
+-- reopened_at set means the day is open again (outstanding) until it is confirmed again.
+create table if not exists day_confirmations (
+  service_date date primary key,
+  confirmed_at timestamptz not null default now(),
+  crew text,
+  reopened_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
 -- This app never talks to Supabase's PostgREST API - it connects directly as the table
 -- owner (which always bypasses RLS, so none of this affects the app itself). These
 -- tables hold full customer PII and payment records, so RLS is enabled with zero
@@ -174,3 +191,7 @@ create policy "deny_anonymous_access" on service_visits for all to anon, authent
 
 drop policy if exists "deny_anonymous_access" on skipped_visits;
 create policy "deny_anonymous_access" on skipped_visits for all to anon, authenticated using (false);
+
+alter table day_confirmations enable row level security;
+drop policy if exists "deny_anonymous_access" on day_confirmations;
+create policy "deny_anonymous_access" on day_confirmations for all to anon, authenticated using (false);

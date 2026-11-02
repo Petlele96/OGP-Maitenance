@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { buildReminderLink, buildFollowUpLink, buildWhatsAppChatLink, buildDateChangedLink } from "@/lib/site";
+import { buildReminderLink, buildWhatsAppChatLink, buildDateChangedLink } from "@/lib/site";
 import type { PlanId } from "@/lib/plans";
-import { SKIP_REASONS, type SkipReason, type SkipOrMoveReason } from "@/lib/schedule";
+import DayRoute, { type MovedInfo } from "./DayRoute";
 
-type ViewMode = "today" | "tomorrow" | "week" | "booked";
+type ViewMode = "today" | "tomorrow" | "week" | "booked" | "outstanding";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
 
 interface BlockGroup<T> {
@@ -13,26 +13,11 @@ interface BlockGroup<T> {
   customers: T[];
 }
 
-interface TodayCustomer {
-  id: string;
-  fullName: string;
-  houseNumber: string;
-  whatsappNumber: string;
-  block: number | null;
-  plan: PlanId;
-  notes: string | null;
-  done: boolean;
-  completedAt: string | null;
-  skippedReason: SkipOrMoveReason | null;
-  skippedRescheduledDate: string | null;
-}
-
-interface TodayData {
+interface OutstandingDay {
   date: string;
-  total: number;
-  doneCount: number;
-  skippedCount: number;
-  groups: BlockGroup<TodayCustomer>[];
+  yardCount: number;
+  notDoneCount: number;
+  reopened: boolean;
 }
 
 interface TomorrowCustomer {
@@ -74,10 +59,6 @@ interface BookedData {
   groups: BlockGroup<BookedCustomer>[];
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
 function formatDayHeading(dateKey: string): string {
   const date = new Date(`${dateKey}T00:00:00`);
   return date.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
@@ -92,16 +73,6 @@ function planLabel(plan: PlanId): string {
   if (plan === "annual") return "Annual";
   return "Once-off";
 }
-
-const SKIP_REASON_LABELS: Record<SkipOrMoveReason, string> = {
-  rain: "Rain",
-  gate_locked: "Gate locked",
-  dogs_loose: "Dogs loose",
-  customer_requested: "Customer requested",
-  other: "Other",
-  moved: "Moved",
-  blocked: "Blocked date",
-};
 
 function formatShortDate(dateKey: string): string {
   const date = new Date(`${dateKey}T00:00:00`);
@@ -123,31 +94,31 @@ export default function OpsPage() {
   const [loggingIn, setLoggingIn] = useState(false);
 
   const [view, setView] = useState<ViewMode>("today");
-  const [today, setToday] = useState<TodayData | null>(null);
   const [tomorrow, setTomorrow] = useState<TomorrowData | null>(null);
   const [week, setWeek] = useState<WeekDay[] | null>(null);
   const [booked, setBooked] = useState<BookedData | null>(null);
-  const [completingId, setCompletingId] = useState<string | null>(null);
-  const [pickingReasonId, setPickingReasonId] = useState<string | null>(null);
-  const [skippingId, setSkippingId] = useState<string | null>(null);
+  const [outstanding, setOutstanding] = useState<OutstandingDay[] | null>(null);
+  const [openDate, setOpenDate] = useState<string | null>(null);
+  const [pickDate, setPickDate] = useState("");
   const [sendingLinkId, setSendingLinkId] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveDate, setMoveDate] = useState("");
   const [movingBusyId, setMovingBusyId] = useState<string | null>(null);
-  const [postponing, setPostponing] = useState(false);
-  const [movedCustomer, setMovedCustomer] = useState<
-    { id: string; fullName: string; whatsappNumber: string; dateLabel: string } | null
-  >(null);
+  const [movedCustomer, setMovedCustomer] = useState<MovedInfo | null>(null);
 
-  const loadToday = useCallback(async () => {
-    const res = await fetch("/api/ops/today", { cache: "no-store" });
+  // Also serves as the auth probe for the whole page - 401 here shows the login screen.
+  const loadOutstanding = useCallback(async () => {
+    const res = await fetch("/api/ops/outstanding", { cache: "no-store" });
     if (res.status === 401) {
       setAuthState("unauthenticated");
       return;
     }
-    setToday(await res.json());
+    const json = await res.json();
+    setOutstanding(json.days);
     setAuthState("authenticated");
   }, []);
+
+  const handleUnauthorized = useCallback(() => setAuthState("unauthenticated"), []);
 
   const loadTomorrow = useCallback(async () => {
     const res = await fetch("/api/ops/tomorrow", { cache: "no-store" });
@@ -178,8 +149,8 @@ export default function OpsPage() {
   }, []);
 
   useEffect(() => {
-    loadToday();
-  }, [loadToday]);
+    loadOutstanding();
+  }, [loadOutstanding]);
 
   useEffect(() => {
     if (authState !== "authenticated") return;
@@ -203,66 +174,7 @@ export default function OpsPage() {
       return;
     }
     setPassword("");
-    await loadToday();
-  }
-
-  async function handleDone(signupId: string) {
-    setCompletingId(signupId);
-    const res = await fetch("/api/ops/complete", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ signupId }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setToday((prev) => {
-        if (!prev) return prev;
-        const alreadyDone = prev.groups.some((g) => g.customers.some((c) => c.id === signupId && c.done));
-        return {
-          ...prev,
-          doneCount: alreadyDone ? prev.doneCount : prev.doneCount + 1,
-          groups: prev.groups.map((g) => ({
-            ...g,
-            customers: g.customers.map((c) =>
-              c.id === signupId ? { ...c, done: true, completedAt: data.completedAt } : c
-            ),
-          })),
-        };
-      });
-    }
-    setCompletingId(null);
-  }
-
-  async function handleSkip(signupId: string, reason: SkipReason) {
-    setSkippingId(signupId);
-    const res = await fetch("/api/ops/skip", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ signupId, reason }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setToday((prev) => {
-        if (!prev) return prev;
-        const alreadySkipped = prev.groups.some((g) =>
-          g.customers.some((c) => c.id === signupId && c.skippedReason !== null)
-        );
-        return {
-          ...prev,
-          skippedCount: alreadySkipped ? prev.skippedCount : prev.skippedCount + 1,
-          groups: prev.groups.map((g) => ({
-            ...g,
-            customers: g.customers.map((c) =>
-              c.id === signupId
-                ? { ...c, skippedReason: reason, skippedRescheduledDate: data.rescheduledDate }
-                : c
-            ),
-          })),
-        };
-      });
-    }
-    setSkippingId(null);
-    setPickingReasonId(null);
+    await loadOutstanding();
   }
 
   async function handleSendPaymentLink(signupId: string) {
@@ -317,27 +229,23 @@ export default function OpsPage() {
         whatsappNumber: c.whatsappNumber,
         dateLabel: formatShortDate(moveDate),
       });
-      if (today) await loadToday();
-      if (tomorrow) await loadTomorrow();
+      await loadTomorrow();
     }
     setMoveDate("");
-  }
-
-  async function handlePostponeToday() {
-    if (!window.confirm("Move every remaining visit today to the next working day?")) return;
-    setPostponing(true);
-    await fetch("/api/ops/postpone-today", { method: "POST" });
-    setPostponing(false);
-    await loadToday();
   }
 
   async function handleLogout() {
     await fetch("/api/ops/logout", { method: "POST" });
     setAuthState("unauthenticated");
-    setToday(null);
     setTomorrow(null);
     setWeek(null);
     setBooked(null);
+    setOutstanding(null);
+    setOpenDate(null);
+  }
+
+  function openAnyDay() {
+    if (pickDate) setOpenDate(pickDate);
   }
 
   if (authState === "checking") {
@@ -379,7 +287,7 @@ export default function OpsPage() {
         <div>
           <h1 className="text-lg font-bold text-brand-900">OGP Operations</h1>
           <p className="text-xs text-brand-600">
-            {today && new Date(`${today.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
+            {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
           </p>
         </div>
         <button onClick={handleLogout} className="text-xs font-medium text-brand-500 underline">
@@ -388,33 +296,29 @@ export default function OpsPage() {
       </header>
 
       <div className="mb-4 flex rounded-xl bg-white p-1 shadow-sm ring-1 ring-brand-100">
-        <button
-          onClick={() => setView("today")}
-          className={`flex-1 rounded-lg py-2 text-sm font-semibold ${view === "today" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          Today
-        </button>
-        <button
-          onClick={() => setView("tomorrow")}
-          className={`flex-1 rounded-lg py-2 text-sm font-semibold ${view === "tomorrow" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          Tomorrow
-        </button>
-        <button
-          onClick={() => setView("week")}
-          className={`flex-1 rounded-lg py-2 text-sm font-semibold ${view === "week" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          This Week
-        </button>
-        <button
-          onClick={() => setView("booked")}
-          className={`flex-1 rounded-lg py-2 text-sm font-semibold ${view === "booked" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          Booked
-        </button>
+        {(
+          [
+            ["today", "Today"],
+            ["tomorrow", "Tomorrow"],
+            ["week", "Week"],
+            ["booked", "Booked"],
+            ["outstanding", outstanding && outstanding.length > 0 ? `Outstanding (${outstanding.length})` : "Outstanding"],
+          ] as [ViewMode, string][]
+        ).map(([mode, label]) => (
+          <button
+            key={mode}
+            onClick={() => {
+              setView(mode);
+              if (mode !== "outstanding") setOpenDate(null);
+            }}
+            className={`flex-1 rounded-lg px-1 py-2 text-xs font-semibold ${view === mode ? "bg-brand-600 text-white" : "text-brand-700"}`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {movedCustomer && (
+{movedCustomer && (
         <div className="mb-4 rounded-xl bg-brand-50 p-3 ring-1 ring-brand-100">
           <p className="text-xs font-semibold text-brand-700">
             Moved {movedCustomer.fullName} to {movedCustomer.dateLabel}
@@ -437,167 +341,86 @@ export default function OpsPage() {
         </div>
       )}
 
-      {view === "today" && today && (
-        <>
-          <div className="mb-4 rounded-xl bg-brand-500 px-4 py-3 text-center text-white shadow-sm">
-            <span className="text-lg font-bold">{today.doneCount}</span>
-            <span className="text-sm"> done · </span>
-            <span className="text-lg font-bold">{today.total - today.doneCount - today.skippedCount}</span>
-            <span className="text-sm"> remaining</span>
-          </div>
-
-          {today.total - today.doneCount - today.skippedCount > 0 && (
-            <button
-              onClick={handlePostponeToday}
-              disabled={postponing}
-              className="mb-4 w-full rounded-xl border-2 border-brand-300 px-4 py-3 text-sm font-semibold text-brand-700 disabled:opacity-60"
-            >
-              {postponing ? "Postponing..." : "Postpone today (rain)"}
-            </button>
-          )}
-
-          {today.total === 0 ? (
-            <p className="mt-8 text-center text-sm text-brand-500">No visits scheduled for today.</p>
-          ) : (
-            <div className="flex flex-col gap-6">
-              {today.groups.map((group) => (
-                <div key={group.block ?? "none"}>
-                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-500">
-                    {blockHeading(group.block)}
-                  </h2>
-                  <ul className="flex flex-col gap-3">
-                    {group.customers.map((c) => (
-                      <li
-                        key={c.id}
-                        className={`rounded-2xl p-4 shadow-sm ring-1 ${
-                          c.done || c.skippedReason ? "bg-brand-50 ring-brand-100" : "bg-white ring-brand-100"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="min-w-0">
-                            <p className="font-semibold text-brand-900">{c.fullName}</p>
-                            <p className="text-sm text-brand-700">
-                              House {c.houseNumber} <span className="text-brand-400">· {planLabel(c.plan)}</span>
-                            </p>
-                            <a
-                              href={buildWhatsAppChatLink(c.whatsappNumber)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={() => recordContact(c.id)}
-                              className="text-sm text-brand-500 underline"
-                            >
-                              {c.whatsappNumber}
-                            </a>
-                            {c.notes && <p className="mt-1 text-xs text-brand-500">{c.notes}</p>}
-                          </div>
-                          {c.done ? (
-                            <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-sm font-semibold text-brand-700">
-                              ✓ {c.completedAt ? formatTime(c.completedAt) : "Done"}
-                            </span>
-                          ) : c.skippedReason ? (
-                            <span className="ml-3 shrink-0 rounded-lg bg-brand-100 px-3 py-2 text-right text-xs font-semibold text-brand-700">
-                              {c.skippedReason === "moved" ? "Moved" : `Skipped: ${SKIP_REASON_LABELS[c.skippedReason]}`}
-                              {c.skippedRescheduledDate && (
-                                <>
-                                  <br />→ {formatShortDate(c.skippedRescheduledDate)}
-                                </>
-                              )}
-                            </span>
-                          ) : (
-                            <div className="ml-3 flex shrink-0 flex-col items-end gap-2">
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => setPickingReasonId(c.id)}
-                                  disabled={completingId === c.id}
-                                  className="rounded-lg border-2 border-brand-300 px-3 py-3 text-sm font-semibold text-brand-700 disabled:opacity-60"
-                                >
-                                  Can&apos;t do
-                                </button>
-                                <button
-                                  onClick={() => handleDone(c.id)}
-                                  disabled={completingId === c.id}
-                                  className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                                >
-                                  Done
-                                </button>
-                              </div>
-                              <button
-                                onClick={() => setMovingId(c.id)}
-                                className="text-xs font-medium text-brand-500 underline"
-                              >
-                                Move to a date
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                        {pickingReasonId === c.id && (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {SKIP_REASONS.map((reason) => (
-                              <button
-                                key={reason}
-                                onClick={() => handleSkip(c.id, reason)}
-                                disabled={skippingId === c.id}
-                                className="rounded-lg border-2 border-brand-300 px-3 py-2 text-xs font-semibold text-brand-700 disabled:opacity-60"
-                              >
-                                {SKIP_REASON_LABELS[reason]}
-                              </button>
-                            ))}
-                            <button
-                              onClick={() => setPickingReasonId(null)}
-                              className="rounded-lg px-3 py-2 text-xs font-semibold text-brand-500 underline"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        )}
-                        {movingId === c.id && (
-                          <div className="mt-3 flex items-center gap-2">
-                            <input
-                              type="date"
-                              value={moveDate}
-                              onChange={(e) => setMoveDate(e.target.value)}
-                              className="flex-1 rounded-lg border border-brand-200 px-2 py-2 text-sm text-brand-900"
-                            />
-                            <button
-                              onClick={() => handleMove(c, today.date)}
-                              disabled={!moveDate || movingBusyId === c.id}
-                              className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                            >
-                              Confirm
-                            </button>
-                            <button
-                              onClick={() => {
-                                setMovingId(null);
-                                setMoveDate("");
-                              }}
-                              className="text-xs font-semibold text-brand-500 underline"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        )}
-                        {c.done && c.plan === "once-off" && (
-                          <a
-                            href={buildFollowUpLink(c.fullName, c.whatsappNumber)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={() => recordContact(c.id)}
-                            className="mt-3 block rounded-lg border-2 border-brand-500 px-4 py-3 text-center text-sm font-semibold text-brand-700"
-                          >
-                            Follow up: offer monthly plan
-                          </a>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
+      {view === "today" && (
+        <DayRoute
+          date="today"
+          onMoved={setMovedCustomer}
+          onChanged={loadOutstanding}
+          onUnauthorized={handleUnauthorized}
+        />
       )}
 
-      {view === "tomorrow" && (
+      {view === "outstanding" &&
+        (openDate ? (
+          <DayRoute
+            date={openDate}
+            onBack={() => setOpenDate(null)}
+            onMoved={setMovedCustomer}
+            onChanged={loadOutstanding}
+            onUnauthorized={handleUnauthorized}
+          />
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+              <p className="text-xs font-semibold text-brand-700">Open any day</p>
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="date"
+                  value={pickDate}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setPickDate(e.target.value)}
+                  className="flex-1 rounded-lg border border-brand-200 px-2 py-2 text-sm text-brand-900"
+                />
+                <button
+                  onClick={openAnyDay}
+                  disabled={!pickDate}
+                  className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  Open
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-brand-500">
+                Any day can be opened, confirmed or corrected - nothing is ever locked.
+              </p>
+            </div>
+
+            {outstanding === null ? (
+              <p className="mt-4 text-center text-sm text-brand-500">Loading...</p>
+            ) : outstanding.length === 0 ? (
+              <p className="mt-4 text-center text-sm text-brand-500">All caught up - no unconfirmed days.</p>
+            ) : (
+              <>
+                <p className="text-sm text-brand-600">
+                  {outstanding.length} unconfirmed day{outstanding.length === 1 ? "" : "s"}, oldest first.
+                </p>
+                <ul className="flex flex-col gap-3">
+                  {outstanding.map((d) => (
+                    <li key={d.date}>
+                      <button
+                        onClick={() => setOpenDate(d.date)}
+                        className="flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left shadow-sm ring-1 ring-brand-100"
+                      >
+                        <span>
+                          <span className="block font-semibold text-brand-900">{formatDayHeading(d.date)}</span>
+                          <span className="block text-sm text-brand-600">
+                            {d.yardCount} yard{d.yardCount === 1 ? "" : "s"}
+                            {d.notDoneCount > 0 && <> · {d.notDoneCount} flagged not done</>}
+                            {d.reopened && <> · reopened</>}
+                          </span>
+                        </span>
+                        <span className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white">
+                          Open
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        ))}
+
+{view === "tomorrow" && (
         <>
           {!tomorrow ? (
             <p className="mt-8 text-center text-sm text-brand-500">Loading...</p>
