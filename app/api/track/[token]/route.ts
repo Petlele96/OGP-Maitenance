@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 /** Public, no auth - the token itself (a random UUID) is the only credential. */
 export async function GET(req: NextRequest, { params }: { params: { token: string } }) {
   const signup = await getSignupByTrackingToken(params.token);
-  if (!signup || signup.payment_status === "cancelled") {
+  if (!signup || signup.payment_status === "cancelled" || signup.payment_status === "archived") {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

@@ -79,6 +79,7 @@ export async function GET(req: NextRequest) {
       serviceDayLabel: formatServiceDay(
         await getEffectiveNextServiceDate(c.id, { service_slot: c.serviceSlot, scheduled_visit_date: c.scheduledVisitDate }, now)
       ),
+      awaitingDays: c.awaitingDays,
       paymentLinkSentAt: c.paymentLinkSentAt,
       paymentLinkExpired:
         c.paymentLinkExpiresAt !== null && new Date(c.paymentLinkExpiresAt).getTime() < Date.now(),

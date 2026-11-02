@@ -173,3 +173,6 @@ export function isConfirmedLate(serviceDate: string, confirmedDate: string): boo
   const days = (Date.parse(`${confirmedDate}T00:00:00Z`) - Date.parse(`${serviceDate}T00:00:00Z`)) / 86400000;
   return days > LATE_CONFIRMATION_DAYS;
 }
+
+/** A booking still unpaid after this many days is flagged on the owner side, so it can be chased or archived. */
+export const AWAITING_PAYMENT_FLAG_DAYS = 7;

@@ -61,7 +61,7 @@ export interface SignupRow {
   plan: PlanId;
   amount: string;
   start_date: string | null;
-  payment_status: "booked" | "pending" | "active" | "failed" | "cancelled";
+  payment_status: "booked" | "pending" | "active" | "failed" | "cancelled" | "archived";
   payfast_subscription_token: string | null;
   payfast_m_payment_id: string;
   service_slot: number | null;
@@ -470,7 +470,7 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
               (paused_at at time zone 'Africa/Johannesburg')::date::text as paused_date,
               (cancelled_at at time zone 'Africa/Johannesburg')::date::text as cancelled_date
        from signups
-       where payment_status in ('active', 'booked', 'cancelled')`
+       where payment_status in ('active', 'booked', 'cancelled', 'archived')`
     ),
     pool.query<{ signup_id: string; original_date: string; reason: SkipOrMoveReason; rescheduled_date: string }>(
       `select signup_id, original_date::text, reason, rescheduled_date::text
@@ -496,6 +496,8 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
       const visit = visitByKey.get(key);
       const skip = skipByKey.get(key);
       if (!visit && !skip) {
+        // Archived = off the schedule: no pending yards, past or future.
+        if (s.payment_status === "archived") continue;
         const eligible =
           s.created_date <= date &&
           (s.paused_date === null || s.paused_date > date) &&
@@ -610,7 +612,7 @@ export interface OutstandingDay {
 export async function getOutstandingDays(): Promise<OutstandingDay[]> {
   const { rows } = await getPool().query<{ first_date: string | null }>(
     `select min((created_at at time zone 'Africa/Johannesburg')::date)::text as first_date
-     from signups where payment_status in ('active', 'booked', 'cancelled')`
+     from signups where payment_status in ('active', 'booked', 'cancelled', 'archived')`
   );
   const first = rows[0]?.first_date;
   if (!first) return [];
@@ -1091,7 +1093,9 @@ export interface UnwelcomedCustomer {
 }
 
 /**
- * Active signups nobody's sent the WhatsApp welcome message to yet. Returns the raw
+ * Active AND booked (book now, pay later) signups nobody's sent the WhatsApp welcome message to
+ * yet - a customer who chose to pay later has a real service day reserved and deserves the same
+ * welcome as one who paid. Archived/cancelled/abandoned signups are never welcomed. Returns the raw
  * schedule fields (service_slot for subscribers, scheduled_visit_date for once-off)
  * rather than a formatted day - the caller works out "next occurrence" via
  * lib/schedule.ts, since that's a pure function of "today" and doesn't belong in a query.
@@ -1109,7 +1113,7 @@ export async function getUnwelcomedCustomers(): Promise<UnwelcomedCustomer[]> {
   }>(
     `select id, full_name, house_number, whatsapp_number, plan, service_slot, scheduled_visit_date::text, tracking_token
      from signups
-     where payment_status = 'active' and welcomed_at is null
+     where payment_status in ('active', 'booked') and welcomed_at is null
      order by created_at asc`
   );
   return rows.map((r) => ({
@@ -1126,7 +1130,7 @@ export async function getUnwelcomedCustomers(): Promise<UnwelcomedCustomer[]> {
 
 export async function markWelcomed(id: string): Promise<void> {
   await getPool().query(
-    "update signups set welcomed_at = now() where id = $1 and payment_status = 'active'",
+    "update signups set welcomed_at = now() where id = $1 and payment_status in ('active', 'booked')",
     [id]
   );
 }
@@ -1143,6 +1147,8 @@ export interface BookedCustomer {
   paymentLinkSentAt: string | null;
   paymentLinkExpiresAt: string | null;
   notes: string | null;
+  /** Whole days since the booking was made - the "awaiting payment" clock. */
+  awaitingDays: number;
 }
 
 /**
@@ -1165,9 +1171,11 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     payment_link_sent_at: string | null;
     payment_link_expires_at: string | null;
     notes: string | null;
+    awaiting_days: number;
   }>(
     `select id, full_name, house_number, whatsapp_number, plan, block, service_slot,
-            scheduled_visit_date::text, payment_link_sent_at, payment_link_expires_at::text, notes
+            scheduled_visit_date::text, payment_link_sent_at, payment_link_expires_at::text, notes,
+            floor(extract(epoch from (now() - created_at)) / 86400)::int as awaiting_days
      from signups
      where payment_status = 'booked'
      order by created_at asc`
@@ -1184,6 +1192,7 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     paymentLinkSentAt: r.payment_link_sent_at,
     paymentLinkExpiresAt: r.payment_link_expires_at,
     notes: r.notes,
+    awaitingDays: r.awaiting_days,
   }));
 }
 
@@ -1200,6 +1209,10 @@ export interface CustomerRow {
   scheduledVisitDate: string | null;
   notes: string | null;
   pausedAt: string | null;
+  /** Days since booking, for a booked (awaiting payment) customer only - null for everyone else. */
+  awaitingPaymentDays: number | null;
+  /** On the failed/overdue list (getFailedOrOverdueCustomers) - the same definition the dashboard uses. */
+  overdue: boolean;
 }
 
 /** Full roster for the owner "Customers" tab - search/filter happens client-side since
@@ -1218,12 +1231,15 @@ export async function getAllCustomers(): Promise<CustomerRow[]> {
     scheduled_visit_date: string | null;
     notes: string | null;
     paused_at: string | null;
+    awaiting_days: number | null;
   }>(
     `select id, full_name, house_number, whatsapp_number, plan, payment_status, payment_method,
-            block, service_slot, scheduled_visit_date::text, notes, paused_at
+            block, service_slot, scheduled_visit_date::text, notes, paused_at,
+            case when payment_status = 'booked' then floor(extract(epoch from (now() - created_at)) / 86400)::int end as awaiting_days
      from signups
      order by created_at desc`
   );
+  const overdueIds = new Set((await getFailedOrOverdueCustomers()).map((c) => c.id));
   return rows.map((r) => ({
     id: r.id,
     fullName: r.full_name,
@@ -1237,6 +1253,8 @@ export async function getAllCustomers(): Promise<CustomerRow[]> {
     scheduledVisitDate: r.scheduled_visit_date,
     notes: r.notes,
     pausedAt: r.paused_at,
+    awaitingPaymentDays: r.awaiting_days,
+    overdue: overdueIds.has(r.id),
   }));
 }
 
@@ -1395,6 +1413,34 @@ export async function ownerCancelSignup(id: string): Promise<void> {
      where id = $1 and payment_status <> 'cancelled'`,
     [id]
   );
+}
+
+/**
+ * Archive a customer who booked and never paid: moves them out of the active list and off the
+ * schedule (every schedule/workload query only looks at 'active' and 'booked'). Nothing is
+ * deleted - the row, payments and visit history all stay. Only an unpaid signup can be archived;
+ * a paying customer is paused or cancelled instead. Returns false if nothing matched.
+ *
+ * No PayFast code changes for this: /api/pay/[token] already refuses anything that isn't
+ * 'booked', and if a payment does come through for an archived row the existing ITN activation
+ * simply sets it 'active' again, so a customer who pays later restores themselves.
+ */
+export async function archiveSignup(id: string): Promise<boolean> {
+  const { rowCount } = await getPool().query(
+    `update signups set payment_status = 'archived', updated_at = now()
+     where id = $1 and payment_status in ('booked', 'pending', 'failed')`,
+    [id]
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+/** Brings an archived customer back as 'booked' (awaiting payment) - back on the schedule, ready for a fresh payment link. */
+export async function restoreSignup(id: string): Promise<boolean> {
+  const { rowCount } = await getPool().query(
+    "update signups set payment_status = 'booked', updated_at = now() where id = $1 and payment_status = 'archived'",
+    [id]
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 /**
@@ -1628,14 +1674,17 @@ export async function getCustomerDetail(id: string): Promise<CustomerRow | null>
     scheduled_visit_date: string | null;
     notes: string | null;
     paused_at: string | null;
+    awaiting_days: number | null;
   }>(
     `select id, full_name, house_number, whatsapp_number, plan, payment_status, payment_method,
-            block, service_slot, scheduled_visit_date::text, notes, paused_at
+            block, service_slot, scheduled_visit_date::text, notes, paused_at,
+            case when payment_status = 'booked' then floor(extract(epoch from (now() - created_at)) / 86400)::int end as awaiting_days
      from signups where id = $1`,
     [id]
   );
   const r = rows[0];
   if (!r) return null;
+  const overdue = (await getFailedOrOverdueCustomers()).some((c) => c.id === r.id);
   return {
     id: r.id,
     fullName: r.full_name,
@@ -1649,6 +1698,8 @@ export async function getCustomerDetail(id: string): Promise<CustomerRow | null>
     scheduledVisitDate: r.scheduled_visit_date,
     notes: r.notes,
     pausedAt: r.paused_at,
+    awaitingPaymentDays: r.awaiting_days,
+    overdue,
   };
 }
 
@@ -1764,7 +1815,7 @@ export async function getMessageCentreList(): Promise<MessageCentreCustomer[]> {
   }>(
     `select id, full_name, house_number, whatsapp_number, last_contacted_at
      from signups
-     where payment_status <> 'cancelled'
+     where payment_status not in ('cancelled', 'archived')
      order by last_contacted_at asc nulls first, full_name asc`
   );
   return rows.map((r) => ({

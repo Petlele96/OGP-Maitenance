@@ -3,7 +3,7 @@ import type { SkipOrMoveReason } from "@/lib/schedule";
 import { MIN_BLOCK, MAX_BLOCK } from "@/lib/sort";
 
 export type PaymentMethod = "payfast" | "eft" | "cash";
-export type PaymentStatus = "booked" | "pending" | "active" | "failed" | "cancelled";
+export type PaymentStatus = "booked" | "pending" | "active" | "failed" | "cancelled" | "archived";
 
 export interface CustomerRow {
   id: string;
@@ -18,6 +18,41 @@ export interface CustomerRow {
   scheduledVisitDate: string | null;
   notes: string | null;
   pausedAt: string | null;
+  /** Days since booking - only for a booked (awaiting payment) customer, null otherwise. */
+  awaitingPaymentDays: number | null;
+  /** Failed or lapsed payment - same definition as the dashboard's overdue list. */
+  overdue: boolean;
+}
+
+/** The owner's view of who is paying. "checkout" = started a card checkout and never finished - on no schedule. */
+export type CustomerGroup = "subscribed" | "awaiting" | "overdue" | "cancelled" | "checkout" | "archived";
+
+export const MAIN_GROUPS: CustomerGroup[] = ["subscribed", "awaiting", "overdue", "cancelled"];
+export const DEFAULT_GROUPS: CustomerGroup[] = ["subscribed", "awaiting"];
+export const GROUP_LABELS: Record<CustomerGroup, string> = {
+  subscribed: "Subscribed",
+  awaiting: "Awaiting payment",
+  overdue: "Overdue",
+  cancelled: "Cancelled",
+  checkout: "Checkout not completed",
+  archived: "Archived",
+};
+
+export function customerGroup(c: Pick<CustomerRow, "paymentStatus" | "overdue">): CustomerGroup {
+  switch (c.paymentStatus) {
+    case "archived":
+      return "archived";
+    case "cancelled":
+      return "cancelled";
+    case "booked":
+      return "awaiting";
+    case "pending":
+      return "checkout";
+    case "failed":
+      return "overdue";
+    case "active":
+      return c.overdue ? "overdue" : "subscribed";
+  }
 }
 
 export interface CustomerFormState {
@@ -56,6 +91,7 @@ export const STATUS_LABELS: Record<PaymentStatus, string> = {
   active: "Active",
   failed: "Failed",
   cancelled: "Cancelled",
+  archived: "Archived",
 };
 export const SKIP_REASON_LABELS: Record<SkipOrMoveReason, string> = {
   rain: "Rain",

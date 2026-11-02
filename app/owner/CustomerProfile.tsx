@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { buildWhatsAppChatLink, buildDateChangedLink } from "@/lib/site";
-import type { SkipOrMoveReason } from "@/lib/schedule";
+import { AWAITING_PAYMENT_FLAG_DAYS, type SkipOrMoveReason } from "@/lib/schedule";
 import {
   CustomerFields,
   EMPTY_FORM,
@@ -60,6 +60,7 @@ export default function CustomerProfile({
   const [editError, setEditError] = useState<string | null>(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const [moveDate, setMoveDate] = useState("");
   const [moveError, setMoveError] = useState<string | null>(null);
@@ -116,6 +117,32 @@ export default function CustomerProfile({
       body: JSON.stringify({ signupId: id }),
     });
     setActionBusy(false);
+    await load();
+    onChanged();
+  }
+
+  async function archiveOrRestore(kind: "archive" | "restore") {
+    if (!data) return;
+    if (
+      kind === "archive" &&
+      !window.confirm(
+        `Archive ${data.customer.fullName}? They come off the schedule and out of the active list. Nothing is deleted, and you can restore them any time.`
+      )
+    )
+      return;
+    setActionBusy(true);
+    setActionError(null);
+    const res = await fetch(`/api/owner/customers/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signupId: id }),
+    });
+    setActionBusy(false);
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      setActionError(json.error ?? `Couldn't ${kind} that customer.`);
+      return;
+    }
     await load();
     onChanged();
   }
@@ -220,6 +247,17 @@ export default function CustomerProfile({
                 {data.customer.whatsappNumber}
               </a>
               <p className="mt-1 text-xs text-brand-400">{PAYMENT_METHOD_LABELS[data.customer.paymentMethod]}</p>
+              {data.customer.awaitingPaymentDays !== null &&
+                data.customer.awaitingPaymentDays > AWAITING_PAYMENT_FLAG_DAYS && (
+                  <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                    Awaiting payment for {data.customer.awaitingPaymentDays} days - chase them or archive.
+                  </p>
+                )}
+              {data.customer.paymentStatus === "archived" && (
+                <p className="mt-2 rounded-lg bg-brand-50 px-3 py-2 text-xs text-brand-700">
+                  Archived - off the schedule and out of the active list. Nothing has been deleted.
+                </p>
+              )}
               {data.customer.notes && (
                 <p className="mt-3 rounded-lg bg-brand-50 p-2 text-sm text-brand-700">{data.customer.notes}</p>
               )}
@@ -231,7 +269,7 @@ export default function CustomerProfile({
                 >
                   {editing ? "Cancel edit" : "Edit"}
                 </button>
-                {data.customer.paymentStatus !== "cancelled" && (
+                {data.customer.paymentStatus !== "cancelled" && data.customer.paymentStatus !== "archived" && (
                   <button
                     onClick={handlePauseResume}
                     disabled={actionBusy}
@@ -240,7 +278,7 @@ export default function CustomerProfile({
                     {data.customer.pausedAt ? "Resume" : "Pause"}
                   </button>
                 )}
-                {data.customer.paymentStatus !== "cancelled" && (
+                {data.customer.paymentStatus !== "cancelled" && data.customer.paymentStatus !== "archived" && (
                   <button
                     onClick={handleCancel}
                     disabled={actionBusy}
@@ -249,7 +287,26 @@ export default function CustomerProfile({
                     Cancel customer
                   </button>
                 )}
+                {["booked", "pending", "failed"].includes(data.customer.paymentStatus) && (
+                  <button
+                    onClick={() => archiveOrRestore("archive")}
+                    disabled={actionBusy}
+                    className="rounded-lg border-2 border-brand-300 px-4 py-2.5 text-sm font-semibold text-brand-700 disabled:opacity-60"
+                  >
+                    Archive
+                  </button>
+                )}
+                {data.customer.paymentStatus === "archived" && (
+                  <button
+                    onClick={() => archiveOrRestore("restore")}
+                    disabled={actionBusy}
+                    className="rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    Restore
+                  </button>
+                )}
               </div>
+              {actionError && <p className="mt-2 text-sm text-red-600">{actionError}</p>}
 
               {editing && (
                 <form onSubmit={handleSave} className="mt-4 border-t border-brand-50 pt-4">

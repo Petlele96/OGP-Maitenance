@@ -2,14 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { buildWelcomeLink, buildChaseLink, buildWhatsAppChatLink } from "@/lib/site";
-import type { SkipOrMoveReason } from "@/lib/schedule";
+import { AWAITING_PAYMENT_FLAG_DAYS, type SkipOrMoveReason } from "@/lib/schedule";
 import ScheduleTab from "./ScheduleTab";
 import CustomerProfile from "./CustomerProfile";
 import {
   CustomerFields,
   EMPTY_FORM,
   PLAN_LABELS,
-  STATUS_LABELS,
+  GROUP_LABELS,
+  MAIN_GROUPS,
+  DEFAULT_GROUPS,
+  customerGroup,
+  type CustomerGroup,
   PAYMENT_METHOD_LABELS,
   SKIP_REASON_LABELS,
   formatShortDate,
@@ -55,6 +59,7 @@ interface BookedCustomer {
   houseNumber: string;
   whatsappNumber: string;
   serviceDayLabel: string;
+  awaitingDays: number;
   paymentLinkSentAt: string | null;
   paymentLinkExpired: boolean;
 }
@@ -114,6 +119,9 @@ export default function OwnerPage() {
 
   const [customers, setCustomers] = useState<CustomerRow[] | null>(null);
   const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [showCheckout, setShowCheckout] = useState(false);
+  const [shownGroups, setShownGroups] = useState<CustomerGroup[]>(DEFAULT_GROUPS);
   const [showAddForm, setShowAddForm] = useState(false);
   const [addForm, setAddForm] = useState<CustomerFormState>(EMPTY_FORM);
   const [addError, setAddError] = useState<string | null>(null);
@@ -220,6 +228,27 @@ export default function OwnerPage() {
     await loadCustomers();
   }
 
+  async function archiveOrRestore(kind: "archive" | "restore", c: { id: string; fullName: string }) {
+    if (
+      kind === "archive" &&
+      !window.confirm(
+        `Archive ${c.fullName}? They come off the schedule and out of the active list. Nothing is deleted, and you can restore them any time.`
+      )
+    )
+      return;
+    const res = await fetch(`/api/owner/customers/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signupId: c.id }),
+    });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      window.alert(json.error ?? `Couldn't ${kind} ${c.fullName}.`);
+      return;
+    }
+    await Promise.all([loadDashboard(), loadCustomers()]);
+  }
+
   function refreshAfterProfileChange() {
     loadCustomers();
     loadDashboard();
@@ -237,6 +266,26 @@ export default function OwnerPage() {
         c.whatsappNumber.includes(q)
     );
   }, [customers, search]);
+  const grouped = useMemo(() => {
+    const g: Record<CustomerGroup, CustomerRow[]> = {
+      subscribed: [],
+      awaiting: [],
+      overdue: [],
+      cancelled: [],
+      checkout: [],
+      archived: [],
+    };
+    for (const c of filteredCustomers) g[customerGroup(c)].push(c);
+    return g;
+  }, [filteredCustomers]);
+  const archivedCustomers = grouped.archived;
+  const checkoutCustomers = grouped.checkout;
+  const visibleGroups = MAIN_GROUPS.filter((g) => shownGroups.includes(g));
+  const visibleCount = visibleGroups.reduce((n, g) => n + grouped[g].length, 0);
+
+  function toggleGroup(g: CustomerGroup) {
+    setShownGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
+  }
 
   if (authState === "checking") {
     return <main className="flex min-h-dvh items-center justify-center bg-brand-50" />;
@@ -337,6 +386,12 @@ export default function OwnerPage() {
           <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
             <p className="text-xs font-medium text-brand-500">Booked, awaiting payment</p>
             <p className="mt-1 text-2xl font-bold text-brand-900">{data.bookedCount}</p>
+            {data.bookedCustomers.some((c) => c.awaitingDays > AWAITING_PAYMENT_FLAG_DAYS) && (
+              <p className="mt-0.5 text-xs font-semibold text-amber-800">
+                {data.bookedCustomers.filter((c) => c.awaitingDays > AWAITING_PAYMENT_FLAG_DAYS).length} waiting over{" "}
+                {AWAITING_PAYMENT_FLAG_DAYS} days - chase or archive
+              </p>
+            )}
           </div>
 
           <a
@@ -455,9 +510,24 @@ export default function OwnerPage() {
                       </a>
                       <p className="mt-0.5 text-xs text-brand-500">Service day: {c.serviceDayLabel}</p>
                     </button>
-                    <span className="ml-3 shrink-0 rounded-lg bg-brand-50 px-3 py-2 text-xs font-semibold text-brand-700">
-                      {c.paymentLinkExpired ? "Link expired" : c.paymentLinkSentAt ? "Link sent" : "Not sent yet"}
-                    </span>
+                    <div className="ml-3 flex shrink-0 flex-col items-end gap-1.5">
+                      <span className="rounded-lg bg-brand-50 px-3 py-2 text-xs font-semibold text-brand-700">
+                        {c.paymentLinkExpired ? "Link expired" : c.paymentLinkSentAt ? "Link sent" : "Not sent yet"}
+                      </span>
+                      {c.awaitingDays > AWAITING_PAYMENT_FLAG_DAYS && (
+                        <>
+                          <span className="rounded-lg bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">
+                            Waiting {c.awaitingDays} days
+                          </span>
+                          <button
+                            onClick={() => archiveOrRestore("archive", c)}
+                            className="text-xs font-semibold text-brand-600 underline"
+                          >
+                            Archive
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -551,32 +621,145 @@ export default function OwnerPage() {
 
           {!customers ? (
             <p className="mt-4 text-center text-sm text-brand-500">Loading...</p>
-          ) : filteredCustomers.length === 0 ? (
-            <p className="mt-4 text-center text-sm text-brand-500">No customers found.</p>
           ) : (
-            <ul className="flex flex-col gap-3">
-              {filteredCustomers.map((c) => (
-                <li key={c.id} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
-                  <button
-                    onClick={() => setViewingCustomerId(c.id)}
-                    className="flex w-full items-center justify-between text-left"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-semibold text-brand-900">{c.fullName}</p>
-                      <p className="text-sm text-brand-700">
-                        House {c.houseNumber} <span className="text-brand-400">· {PLAN_LABELS[c.plan]}</span>
-                      </p>
-                    </div>
-                    <div className="ml-3 flex shrink-0 flex-col items-end gap-1">
-                      <span className="rounded-lg bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
-                        {c.pausedAt ? "Paused" : STATUS_LABELS[c.paymentStatus]}
-                      </span>
-                      <span className="text-xs text-brand-400">{PAYMENT_METHOD_LABELS[c.paymentMethod]}</span>
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <>
+              <div className="flex flex-wrap gap-2">
+                {MAIN_GROUPS.map((g) => {
+                  const on = shownGroups.includes(g);
+                  return (
+                    <button
+                      key={g}
+                      onClick={() => toggleGroup(g)}
+                      aria-pressed={on}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${
+                        on ? "bg-brand-600 text-white ring-brand-600" : "bg-white text-brand-700 ring-brand-200"
+                      }`}
+                    >
+                      {GROUP_LABELS[g]} ({grouped[g].length})
+                    </button>
+                  );
+                })}
+              </div>
+
+              {visibleGroups.length === 0 ? (
+                <p className="mt-2 text-center text-sm text-brand-500">Pick a group above to see customers.</p>
+              ) : visibleCount === 0 ? (
+                <p className="mt-2 text-center text-sm text-brand-500">No customers found.</p>
+              ) : (
+                visibleGroups.map((g) =>
+                  grouped[g].length === 0 ? null : (
+                    <section key={g} className="flex flex-col gap-3">
+                      <h2 className="text-sm font-semibold text-brand-900">
+                        {GROUP_LABELS[g]} ({grouped[g].length})
+                      </h2>
+                      <ul className="flex flex-col gap-3">
+                        {grouped[g].map((c) => (
+                          <li key={c.id} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+                            <button
+                              onClick={() => setViewingCustomerId(c.id)}
+                              className="flex w-full items-center justify-between text-left"
+                            >
+                              <div className="min-w-0">
+                                <p className="font-semibold text-brand-900">{c.fullName}</p>
+                                <p className="text-sm text-brand-700">
+                                  House {c.houseNumber} <span className="text-brand-400">· {PLAN_LABELS[c.plan]}</span>
+                                </p>
+                              </div>
+                              <div className="ml-3 flex shrink-0 flex-col items-end gap-1">
+                                <span className="rounded-lg bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
+                                  {c.pausedAt ? "Paused" : GROUP_LABELS[g]}
+                                </span>
+                                <span className="text-xs text-brand-400">{PAYMENT_METHOD_LABELS[c.paymentMethod]}</span>
+                                {c.awaitingPaymentDays !== null && c.awaitingPaymentDays > AWAITING_PAYMENT_FLAG_DAYS && (
+                                  <span className="rounded-lg bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                                    Waiting {c.awaitingPaymentDays} days
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )
+                )
+              )}
+            </>
+          )}
+
+          {checkoutCustomers.length > 0 && (
+            <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+              <button
+                onClick={() => setShowCheckout((v) => !v)}
+                className="flex w-full items-center justify-between text-left"
+              >
+                <div>
+                  <h2 className="text-sm font-semibold text-brand-900">
+                    {GROUP_LABELS.checkout} ({checkoutCustomers.length})
+                  </h2>
+                  <p className="text-xs text-brand-500">Started a card checkout and never finished. Not on the schedule.</p>
+                </div>
+                <span className="text-xs font-medium text-brand-500">{showCheckout ? "Hide" : "Show"}</span>
+              </button>
+              {showCheckout && (
+                <ul className="mt-3 flex flex-col gap-3">
+                  {checkoutCustomers.map((c) => (
+                    <li
+                      key={c.id}
+                      className="flex items-center justify-between border-t border-brand-50 pt-3 first:border-0 first:pt-0"
+                    >
+                      <button onClick={() => setViewingCustomerId(c.id)} className="min-w-0 text-left">
+                        <p className="font-semibold text-brand-900">{c.fullName}</p>
+                        <p className="text-sm text-brand-700">
+                          House {c.houseNumber} <span className="text-brand-400">· {PLAN_LABELS[c.plan]}</span>
+                        </p>
+                      </button>
+                      <button
+                        onClick={() => archiveOrRestore("archive", c)}
+                        className="ml-3 shrink-0 rounded-lg border-2 border-brand-300 px-3 py-2 text-xs font-semibold text-brand-700"
+                      >
+                        Archive
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {archivedCustomers.length > 0 && (
+            <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+              <button
+                onClick={() => setShowArchived((v) => !v)}
+                className="flex w-full items-center justify-between text-left"
+              >
+                <h2 className="text-sm font-semibold text-brand-900">Archived ({archivedCustomers.length})</h2>
+                <span className="text-xs font-medium text-brand-500">{showArchived ? "Hide" : "Show"}</span>
+              </button>
+              {showArchived && (
+                <ul className="mt-3 flex flex-col gap-3">
+                  {archivedCustomers.map((c) => (
+                    <li
+                      key={c.id}
+                      className="flex items-center justify-between border-t border-brand-50 pt-3 first:border-0 first:pt-0"
+                    >
+                      <button onClick={() => setViewingCustomerId(c.id)} className="min-w-0 text-left">
+                        <p className="font-semibold text-brand-900">{c.fullName}</p>
+                        <p className="text-sm text-brand-700">
+                          House {c.houseNumber} <span className="text-brand-400">· {PLAN_LABELS[c.plan]}</span>
+                        </p>
+                      </button>
+                      <button
+                        onClick={() => archiveOrRestore("restore", c)}
+                        className="ml-3 shrink-0 rounded-lg border-2 border-brand-300 px-3 py-2 text-xs font-semibold text-brand-700"
+                      >
+                        Restore
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           )}
         </>
       )}
