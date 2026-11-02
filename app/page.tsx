@@ -7,6 +7,7 @@ import { PLANS, type PlanId } from "@/lib/plans";
 import { ASK_QUESTION_LINK, COMPANY_NAME, COMPANY_REG, planPhrase } from "@/lib/site";
 import { SiteFooter } from "./components/SiteFooter";
 import { BeforeAfterShowcase } from "./components/BeforeAfterShowcase";
+import { CustomerReviews } from "./components/CustomerReviews";
 
 const COVERAGE_ITEMS = [
   "Grass cut to an even height, front and back",
@@ -148,6 +149,9 @@ export default function SignupPage() {
 
       {/* 1b. Before & after */}
       <BeforeAfterShowcase />
+
+      {/* 1c. Approved customer reviews - renders nothing until there is at least one */}
+      <CustomerReviews />
 
       {/* 2. What R200 covers */}
       <section className="border-t border-navy/10 py-24">

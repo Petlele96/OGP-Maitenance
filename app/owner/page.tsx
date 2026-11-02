@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { buildWelcomeLink, buildChaseLink, buildWhatsAppChatLink } from "@/lib/site";
 import { AWAITING_PAYMENT_FLAG_DAYS, type SkipOrMoveReason } from "@/lib/schedule";
 import ScheduleTab from "./ScheduleTab";
+import ReviewsTab from "./ReviewsTab";
 import CustomerProfile from "./CustomerProfile";
 import {
   CustomerFields,
@@ -23,7 +24,7 @@ import {
 } from "./CustomerShared";
 
 type AuthState = "checking" | "unauthenticated" | "authenticated";
-type OwnerTab = "dashboard" | "customers" | "schedule" | "messages";
+type OwnerTab = "dashboard" | "customers" | "schedule" | "messages" | "reviews";
 
 interface FailedOrOverdue {
   id: string;
@@ -74,6 +75,7 @@ interface DashboardData {
     byMethod: { payfast: number; eft: number; cash: number };
   };
   failedOrOverdue: FailedOrOverdue[];
+  pendingReviewCount: number;
   cancellationsThisMonth: number;
   completion: { done: number; scheduled: number };
   unwelcomedCustomers: UnwelcomedCustomer[];
@@ -362,9 +364,16 @@ export default function OwnerPage() {
         >
           Messages
         </button>
+        <button
+          onClick={() => setTab("reviews")}
+          className={`flex-1 rounded-lg py-2 text-xs font-semibold ${tab === "reviews" ? "bg-brand-600 text-white" : "text-brand-700"}`}
+        >
+          Reviews{data && data.pendingReviewCount > 0 ? ` (${data.pendingReviewCount})` : ""}
+        </button>
       </div>
 
       {tab === "schedule" && <ScheduleTab />}
+      {tab === "reviews" && <ReviewsTab onChanged={loadDashboard} />}
 
       {tab === "dashboard" && data && (
         <>

@@ -108,3 +108,8 @@ export function buildPaymentLinkLink(
   const message = buildPaymentLinkMessage(fullName, planId, payUrl);
   return `https://wa.me/${toWhatsAppInternational(whatsappNumber)}?text=${encodeURIComponent(message)}`;
 }
+/** The owner Reviews tab's "share" button - opens WhatsApp with the one public review link, to send to anyone or drop in a group. */
+export function buildReviewShareLink(reviewUrl: string): string {
+  const message = `Thanks for choosing OGP Services. If you have a minute, we'd really appreciate a quick review: ${reviewUrl}`;
+  return `https://wa.me/?text=${encodeURIComponent(message)}`;
+}

@@ -195,3 +195,32 @@ create policy "deny_anonymous_access" on skipped_visits for all to anon, authent
 alter table day_confirmations enable row level security;
 drop policy if exists "deny_anonymous_access" on day_confirmations;
 create policy "deny_anonymous_access" on day_confirmations for all to anon, authenticated using (false);
+
+-- Customer reviews, collected from one public form (/review) - no account and no per-customer link.
+-- The submitted phone is stored in the same normalised 0XXXXXXXXX form as signups.whatsapp_number so the
+-- owner interface can match it against the customer list. It is never selected for the public site.
+-- A review is never public until the owner approves it. Hidden is a separate flag from status so un-hiding
+-- puts a review back exactly where it was - an approved review returns to the site and a never-approved one
+-- returns to the pending queue, it is never published by accident. ip_hash is a salted hash (never the raw
+-- address) used only to rate-limit the public form.
+create table if not exists reviews (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  phone text not null,
+  rating smallint not null check (rating between 1 and 5),
+  comment text not null default '',
+  status text not null default 'pending' check (status in ('pending', 'approved')),
+  hidden boolean not null default false,
+  reply text,
+  replied_at timestamptz,
+  ip_hash text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists reviews_ip_idx on reviews (ip_hash, created_at);
+create index if not exists reviews_public_idx on reviews (created_at desc) where status = 'approved' and not hidden;
+create index if not exists signups_whatsapp_idx on signups (whatsapp_number);
+
+alter table reviews enable row level security;
+drop policy if exists "deny_anonymous_access" on reviews;
+create policy "deny_anonymous_access" on reviews for all to anon, authenticated using (false);

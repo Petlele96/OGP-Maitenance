@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MIN_BLOCK, MAX_BLOCK } from "./sort";
+import { REVIEW_COMMENT_MAX, REVIEW_NAME_MAX } from "./reviews";
 
 // South African mobile numbers: 0821234567, +27821234567, or 27821234567
 const SA_MOBILE_REGEX = /^(0|27|\+27)[6-8][0-9]{8}$/;
@@ -111,4 +112,18 @@ export const setServiceDaySchema = z.object({
   signupId: z.string().uuid(),
   serviceSlot: z.number().int().min(1).max(14).nullable().optional(),
   scheduledVisitDate: z.string().regex(DATE_KEY_REGEX).nullable().optional(),
+});
+
+/** Public review form (/review). Phone is in any normal SA format and is normalised before it is stored or matched. */
+export const reviewSchema = z.object({
+  name: z.string().trim().min(2, "Please enter your name").max(REVIEW_NAME_MAX, "That name is too long"),
+  // People type "082 123 4567" or "(082) 123-4567" - drop the separators before checking the number itself.
+  phone: z
+    .string()
+    .transform((v) => v.replace(/[\s\-().]/g, ""))
+    .pipe(z.string().regex(SA_MOBILE_REGEX, "Enter a valid South African cell number")),
+  rating: z.number().int("Please choose a star rating").min(1, "Please choose a star rating").max(5, "Please choose a star rating"),
+  comment: z.string().trim().max(REVIEW_COMMENT_MAX, "Please keep your comment shorter").default(""),
+  // Honeypot: a real person never sees or fills this. A bot that fills every field does.
+  website: z.string().optional(),
 });

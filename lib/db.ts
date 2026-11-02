@@ -1826,4 +1826,171 @@ export async function getMessageCentreList(): Promise<MessageCentreCustomer[]> {
     lastContactedAt: r.last_contacted_at,
   }));
 }
+// ---------------------------------------------------------------------------------------------
+// Customer reviews
+// ---------------------------------------------------------------------------------------------
 
+export type ReviewAction = "approve" | "hide" | "unhide" | "reply";
+
+/**
+ * The block to show beside a review on the public site: the block of the customer(s) whose phone number
+ * matches, but only when that is unambiguous (one distinct block). No match, or a match with no block
+ * recorded, shows the first name alone. The reviewer is never asked for a block - it comes from our own records.
+ */
+const REVIEW_SITE_BLOCK_SQL = `(select case when count(distinct s.block) = 1 then max(s.block) end
+                                 from signups s where s.whatsapp_number = r.phone)`;
+
+/**
+ * Stores a new review as 'pending'. The rate limit is part of the insert itself, so concurrent requests
+ * from one address can't slip past it: returns 'rate_limited' when this address already has too many.
+ */
+export async function createReview(input: {
+  name: string;
+  phone: string;
+  rating: number;
+  comment: string;
+  ipHash: string;
+  maxPerHour: number;
+  maxPerDay: number;
+}): Promise<"ok" | "rate_limited"> {
+  const { rowCount } = await getPool().query(
+    `insert into reviews (name, phone, rating, comment, ip_hash)
+     select $1::text, $2::text, $3::smallint, $4::text, $5::text
+     where (select count(*) from reviews where ip_hash = $5::text and created_at > now() - interval '1 hour') < $6::int
+       and (select count(*) from reviews where ip_hash = $5::text and created_at > now() - interval '1 day') < $7::int`,
+    [input.name, input.phone, input.rating, input.comment, input.ipHash, input.maxPerHour, input.maxPerDay]
+  );
+  return (rowCount ?? 0) > 0 ? "ok" : "rate_limited";
+}
+
+export interface PublicReview {
+  id: string;
+  firstName: string;
+  block: number | null;
+  rating: number;
+  comment: string;
+  reply: string | null;
+}
+
+/** Approved and not hidden, newest first. Only a first name and a block leave this query - no phone, no surname, no address. */
+export async function getPublicReviews(limit = 30): Promise<PublicReview[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    first_name: string;
+    block: number | null;
+    rating: number;
+    comment: string;
+    reply: string | null;
+  }>(
+    `select r.id, left(split_part(btrim(r.name), ' ', 1), 40) as first_name,
+            ${REVIEW_SITE_BLOCK_SQL} as block, r.rating, r.comment, r.reply
+     from reviews r
+     where r.status = 'approved' and not r.hidden
+     order by r.created_at desc
+     limit $1`,
+    [limit]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    firstName: r.first_name,
+    block: r.block,
+    rating: r.rating,
+    comment: r.comment,
+    reply: r.reply,
+  }));
+}
+
+export interface ReviewCustomerMatch {
+  fullName: string;
+  houseNumber: string;
+  block: number | null;
+  status: string;
+}
+
+export interface OwnerReview {
+  id: string;
+  name: string;
+  phone: string;
+  rating: number;
+  comment: string;
+  status: "pending" | "approved";
+  hidden: boolean;
+  reply: string | null;
+  createdAt: string;
+  /** Customers on our list with this phone number - empty means no match. Current customers first. */
+  matches: ReviewCustomerMatch[];
+  /** Block that would show on the public site beside this review. */
+  siteBlock: number | null;
+}
+
+/** Everything, with the phone matched against the customer list. Pending (not hidden) first so the queue is at the top. */
+export async function getOwnerReviews(): Promise<OwnerReview[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    name: string;
+    phone: string;
+    rating: number;
+    comment: string;
+    status: "pending" | "approved";
+    hidden: boolean;
+    reply: string | null;
+    created_at: string;
+    matches: { fullName: string; houseNumber: string; block: number | null; status: string }[];
+    site_block: number | null;
+  }>(
+    `select r.id, r.name, r.phone, r.rating, r.comment, r.status, r.hidden, r.reply, r.created_at,
+            coalesce((select json_agg(json_build_object(
+                        'fullName', s.full_name, 'houseNumber', s.house_number, 'block', s.block, 'status', s.payment_status)
+                        order by (s.payment_status in ('active', 'booked')) desc, s.created_at desc)
+                      from signups s where s.whatsapp_number = r.phone), '[]'::json) as matches,
+            ${REVIEW_SITE_BLOCK_SQL} as site_block
+     from reviews r
+     order by (r.status = 'pending' and not r.hidden) desc, r.created_at desc`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    phone: r.phone,
+    rating: r.rating,
+    comment: r.comment,
+    status: r.status,
+    hidden: r.hidden,
+    reply: r.reply,
+    createdAt: r.created_at,
+    matches: r.matches,
+    siteBlock: r.site_block,
+  }));
+}
+
+export async function getPendingReviewCount(): Promise<number> {
+  const { rows } = await getPool().query<{ n: number }>(
+    "select count(*)::int as n from reviews where status = 'pending' and not hidden"
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/** Approve publishes (and un-hides). Hide/unhide only flip the flag. Reply sets or, when empty, clears the reply. */
+export async function moderateReview(id: string, action: ReviewAction, reply?: string): Promise<boolean> {
+  const pool = getPool();
+  let rowCount: number | null;
+  if (action === "approve") {
+    ({ rowCount } = await pool.query(
+      "update reviews set status = 'approved', hidden = false, updated_at = now() where id = $1",
+      [id]
+    ));
+  } else if (action === "hide") {
+    ({ rowCount } = await pool.query("update reviews set hidden = true, updated_at = now() where id = $1", [id]));
+  } else if (action === "unhide") {
+    ({ rowCount } = await pool.query("update reviews set hidden = false, updated_at = now() where id = $1", [id]));
+  } else {
+    const text = (reply ?? "").trim();
+    ({ rowCount } = await pool.query(
+      `update reviews set reply = nullif($2::text, ''),
+              replied_at = case when $2::text = '' then null else now() end,
+              updated_at = now()
+       where id = $1`,
+      [id, text]
+    ));
+  }
+  return (rowCount ?? 0) > 0;
+}
