@@ -8,6 +8,7 @@ import { ASK_QUESTION_LINK, COMPANY_NAME, COMPANY_REG, planPhrase } from "@/lib/
 import { SiteFooter } from "./components/SiteFooter";
 import { BeforeAfterShowcase } from "./components/BeforeAfterShowcase";
 import { CustomerReviews } from "./components/CustomerReviews";
+import { PaymentTrustBlock, PaymentTrustNote } from "./components/PaymentTrust";
 
 const COVERAGE_ITEMS = [
   "Grass cut to an even height, front and back",
@@ -291,6 +292,7 @@ export default function SignupPage() {
               given you a service day. We&apos;ll WhatsApp you a payment link on {whatsappNumber} to get started -
               no need to do anything else for now.
             </p>
+            <PaymentTrustNote />
           </div>
         ) : (
         <form onSubmit={handleSubmit} className="flex flex-col gap-10" noValidate>
@@ -436,6 +438,8 @@ export default function SignupPage() {
               {error}
             </p>
           )}
+
+          <PaymentTrustBlock />
 
           <div>
             <button

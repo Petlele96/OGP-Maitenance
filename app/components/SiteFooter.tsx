@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PAYFAST_FOOTER_LINE } from "./payment-copy";
 import { WHATSAPP_DISPLAY, WHATSAPP_LINK, REPORT_PROBLEM_LINK, COMPANY_NAME, COMPANY_REG } from "@/lib/site";
 
 /**
@@ -43,6 +44,7 @@ export function SiteFooter() {
             Report a problem
           </a>
         </div>
+        <p className="mt-6 text-xs text-navy/60">{PAYFAST_FOOTER_LINE}</p>
       </div>
     </footer>
   );
