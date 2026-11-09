@@ -5,6 +5,8 @@ import { buildWelcomeLink, buildChaseLink, buildWhatsAppChatLink } from "@/lib/s
 import { AWAITING_PAYMENT_FLAG_DAYS, type SkipOrMoveReason } from "@/lib/schedule";
 import ScheduleTab from "./ScheduleTab";
 import ReviewsTab from "./ReviewsTab";
+import SubscriptionsTab from "./SubscriptionsTab";
+import ServiceStatus from "./ServiceStatus";
 import CustomerProfile from "./CustomerProfile";
 import {
   CustomerFields,
@@ -24,7 +26,7 @@ import {
 } from "./CustomerShared";
 
 type AuthState = "checking" | "unauthenticated" | "authenticated";
-type OwnerTab = "dashboard" | "customers" | "schedule" | "messages" | "reviews";
+type OwnerTab = "dashboard" | "customers" | "schedule" | "subscriptions" | "messages" | "reviews";
 
 interface FailedOrOverdue {
   id: string;
@@ -116,6 +118,7 @@ export default function OwnerPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
   const [tab, setTab] = useState<OwnerTab>("dashboard");
+  const [liveOverdue, setLiveOverdue] = useState<number | null>(null);
   const [data, setData] = useState<DashboardData | null>(null);
   const [viewingCustomerId, setViewingCustomerId] = useState<string | null>(null);
 
@@ -339,40 +342,29 @@ export default function OwnerPage() {
         </button>
       </header>
 
-      <div className="flex rounded-xl bg-white p-1 shadow-sm ring-1 ring-brand-100">
-        <button
-          onClick={() => setTab("dashboard")}
-          className={`flex-1 rounded-lg py-2 text-xs font-semibold ${tab === "dashboard" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          Dashboard
-        </button>
-        <button
-          onClick={() => setTab("customers")}
-          className={`flex-1 rounded-lg py-2 text-xs font-semibold ${tab === "customers" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          Customers
-        </button>
-        <button
-          onClick={() => setTab("schedule")}
-          className={`flex-1 rounded-lg py-2 text-xs font-semibold ${tab === "schedule" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          Schedule
-        </button>
-        <button
-          onClick={() => setTab("messages")}
-          className={`flex-1 rounded-lg py-2 text-xs font-semibold ${tab === "messages" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          Messages
-        </button>
-        <button
-          onClick={() => setTab("reviews")}
-          className={`flex-1 rounded-lg py-2 text-xs font-semibold ${tab === "reviews" ? "bg-brand-600 text-white" : "text-brand-700"}`}
-        >
-          Reviews{data && data.pendingReviewCount > 0 ? ` (${data.pendingReviewCount})` : ""}
-        </button>
+      <div className="grid grid-cols-3 gap-1 rounded-xl bg-white p-1 shadow-sm ring-1 ring-brand-100">
+        {(
+          [
+            ["dashboard", "Dashboard"],
+            ["customers", "Customers"],
+            ["schedule", "Schedule"],
+            ["subscriptions", "Subscriptions"],
+            ["messages", "Messages"],
+            ["reviews", `Reviews${data && data.pendingReviewCount > 0 ? ` (${data.pendingReviewCount})` : ""}`],
+          ] as [OwnerTab, string][]
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`rounded-lg py-2 text-xs font-semibold ${tab === id ? "bg-brand-600 text-white" : "text-brand-700"}`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {tab === "schedule" && <ScheduleTab />}
+      {tab === "subscriptions" && <SubscriptionsTab />}
       {tab === "reviews" && <ReviewsTab onChanged={loadDashboard} />}
 
       {tab === "dashboard" && data && (
@@ -403,20 +395,24 @@ export default function OwnerPage() {
             )}
           </div>
 
-          <a
-            href="/ops"
-            className={`block rounded-2xl p-4 shadow-sm ring-1 ${
-              data.overdueCount > 0 ? "bg-red-50 ring-red-200" : "bg-white ring-brand-100"
-            }`}
-          >
-            <p className="text-xs font-medium text-brand-500">Overdue clients</p>
-            <p className="mt-1 text-2xl font-bold text-brand-900">{data.overdueCount}</p>
-            <p className="mt-0.5 text-xs text-brand-600">
-              {data.overdueCount === 0
-                ? "Nobody is past their next service date."
-                : "past their next service date - see the Overdue tab on the operations page"}
-            </p>
-          </a>
+          {(() => {
+            const overdue = liveOverdue ?? data.overdueCount;
+            return (
+              <div
+                className={`rounded-2xl p-4 shadow-sm ring-1 ${overdue > 0 ? "bg-red-50 ring-red-200" : "bg-white ring-brand-100"}`}
+              >
+                <p className="text-xs font-medium text-brand-500">Overdue clients</p>
+                <p className="mt-1 text-2xl font-bold text-brand-900">{overdue}</p>
+                <p className="mt-0.5 text-xs text-brand-600">
+                  {overdue === 0
+                    ? "Nobody is past their next service date."
+                    : "past their next service date - flagged in the list below"}
+                </p>
+              </div>
+            );
+          })()}
+
+          <ServiceStatus onOverdueCount={setLiveOverdue} />
 
           <div className="rounded-2xl bg-brand-600 p-4 shadow-sm">
             <p className="text-xs font-medium text-brand-100">Money in this month</p>

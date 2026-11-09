@@ -100,6 +100,8 @@ export default function DayRoute({
   const [moveDate, setMoveDate] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [unticked, setUnticked] = useState<Set<string>>(new Set());
   const [postponing, setPostponing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -156,16 +158,31 @@ export default function DayRoute({
     setBusyId(null);
   }
 
-  async function confirmDay() {
-    if (!workerId) return;
+  function openReview() {
+    setUnticked(new Set());
+    setReviewing(true);
+  }
+
+  function toggleTick(id: string) {
+    setUnticked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function confirmDay(signupIds: string[]) {
+    if (!workerId || signupIds.length === 0) return;
     setConfirming(true);
     try {
       localStorage.setItem(WORKER_KEY, workerId);
     } catch {
       /* ignore */
     }
-    await run(() => post("/api/ops/day/confirm", { date, workerId }));
+    await run(() => post("/api/ops/day/confirm", { date, workerId, signupIds }));
     setConfirming(false);
+    setReviewing(false);
   }
 
   async function postponeToday() {
@@ -195,6 +212,9 @@ export default function DayRoute({
   const notDone = yards.filter((y) => y.status === "not_done");
   const pendingCount = yards.filter((y) => y.status === "pending").length;
   const doneCount = yards.filter((y) => y.status === "done").length;
+  const pendingYards = yards.filter((y) => y.status === "pending");
+  const recordCount = pendingYards.filter((y) => !unticked.has(y.id)).length;
+  const overdueTicked = pendingYards.filter((y) => y.overdueSince && !unticked.has(y.id)).length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -216,7 +236,64 @@ export default function DayRoute({
         <p className="mt-4 text-center text-sm text-brand-500">No visits scheduled for this day.</p>
       ) : (
         <>
-          {editable && pendingCount > 0 ? (
+          {editable && pendingCount > 0 && reviewing ? (
+            <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-300">
+              <h3 className="text-base font-bold text-brand-900">
+                Record {recordCount} visit{recordCount === 1 ? "" : "s"}
+              </h3>
+              <p className="mt-1 text-xs text-brand-600">
+                Each gets a visit record dated {shortDate(data.date)}, by {workers.find((w) => w.id === workerId)?.name ?? "—"}.
+                Untick any that were not actually done - they stay on the list.
+              </p>
+              <ul className="mt-3 flex flex-col divide-y divide-brand-50">
+                {pendingYards.map((y) => (
+                  <li key={y.id}>
+                    <label className="flex cursor-pointer items-start gap-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={!unticked.has(y.id)}
+                        onChange={() => toggleTick(y.id)}
+                        className="mt-1 h-5 w-5 shrink-0 accent-brand-600"
+                      />
+                      <span className="min-w-0 text-sm">
+                        <span className="font-semibold text-brand-900">{y.fullName}</span>
+                        <span className="text-brand-500">
+                          {" "}
+                          · House {y.houseNumber}
+                          {y.block !== null && <> · Block {y.block}</>}
+                        </span>
+                        {y.overdueSince && (
+                          <span className="ml-2 rounded-md bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-800">
+                            Overdue since {shortDate(y.overdueSince)}
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              {overdueTicked > 0 && (
+                <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
+                  {overdueTicked} overdue yard{overdueTicked === 1 ? " is" : "s are"} ticked. They will be recorded as done
+                  on {shortDate(data.date)}. Untick any that weren&apos;t done.
+                </p>
+              )}
+              <button
+                onClick={() => confirmDay(pendingYards.filter((y) => !unticked.has(y.id)).map((y) => y.id))}
+                disabled={confirming || recordCount === 0}
+                className="mt-3 h-14 w-full rounded-xl bg-brand-600 text-lg font-bold text-white shadow-sm disabled:opacity-60"
+              >
+                {confirming ? "Recording..." : `Record ${recordCount} visit${recordCount === 1 ? "" : "s"}`}
+              </button>
+              <button
+                onClick={() => setReviewing(false)}
+                disabled={confirming}
+                className="mt-2 w-full rounded-xl border-2 border-brand-300 px-4 py-3 text-sm font-semibold text-brand-700 disabled:opacity-60"
+              >
+                Back
+              </button>
+            </div>
+          ) : editable && pendingCount > 0 ? (
             <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
               <label className="block text-xs font-medium text-brand-600">
                 Who did this route?
@@ -234,14 +311,14 @@ export default function DayRoute({
                 </select>
               </label>
               <button
-                onClick={confirmDay}
-                disabled={confirming || !workerId}
+                onClick={openReview}
+                disabled={!workerId}
                 className="mt-3 h-14 w-full rounded-xl bg-brand-600 text-lg font-bold text-white shadow-sm disabled:opacity-60"
               >
-                {confirming ? "Recording..." : "Confirm day"}
+                Confirm day
               </button>
               <p className="mt-2 text-center text-xs text-brand-600">
-                {doneCount} done · {notDone.length} not done · {pendingCount} will get a visit record dated today
+                {doneCount} done · {notDone.length} not done · {pendingCount} to review before anything is recorded
               </p>
             </div>
           ) : null}

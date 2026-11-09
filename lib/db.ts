@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { PLANS, type PlanId, isSubscriberPlan } from "./plans";
 import { groupByBlock } from "./sort";
+import { nextDebitDate } from "./billing";
 import {
   toDateKey,
   visitDaysForSlotInMonth,
@@ -645,15 +646,17 @@ async function writeVisitRecord(input: {
 
 /**
  * "Confirm day": a bulk shortcut over the visit record - it writes one record, dated `dateKey` and credited
- * to `worker`, for every client on that day's list who has no record for that date yet (overdue clients on
- * the list included; flag a yard Not done first to leave it out). It keeps no state of its own: nothing is
- * stored about the day, so there is no such thing as an unconfirmed or confirmed day. Returns records written.
+ * to `worker`, for each client on that day's list who has no record for that date yet. `onlyIds` is the
+ * exact set the owner ticked on the review screen: nobody outside it is ever written, and nobody who isn't
+ * still on the list is either. It keeps no state of its own: nothing is stored about the day, so there is no
+ * such thing as an unconfirmed or confirmed day. Returns records written.
  */
-export async function confirmDay(dateKey: string, worker: string): Promise<number> {
+export async function confirmDay(dateKey: string, worker: string, onlyIds: string[]): Promise<number> {
   const { yards } = await getDayRoute(dateKey);
+  const allowed = new Set(onlyIds);
   let written = 0;
   for (const y of yards) {
-    if (y.status !== "pending") continue;
+    if (y.status !== "pending" || !allowed.has(y.id)) continue;
     const res = await writeVisitRecord({ signupId: y.id, serviceDate: dateKey, worker, note: null, overwrite: false });
     if (res.inserted) written++;
   }
@@ -1476,7 +1479,7 @@ export async function resumeSignup(id: string): Promise<void> {
 }
 
 /**
- * Routing is by next service date, so changing a client's fixed day (or Rebalance moving them) must move that
+ * Routing is by next service date, so changing a client's fixed day must move that
  * date too - otherwise the change would silently do nothing. The new date is the slot's next visit from today.
  */
 async function retargetNextDateToSlot(signupId: string, slot: number): Promise<void> {
@@ -1628,142 +1631,260 @@ export async function getVisitsGroupedByDate(dates: string[]): Promise<Map<strin
   return result;
 }
 
-export interface CalendarDay {
-  date: string;
-  count: number;
-  blocked: boolean;
-  blockedLabel: string | null;
-  customers: { id: string; fullName: string; houseNumber: string; plan: PlanId; block: number | null }[];
-}
-
-/** Owner-page month calendar - every scheduled visit in `year`-`month` (1-indexed), grouped by day. */
-export async function getCalendarMonth(year: number, month1indexed: number): Promise<CalendarDay[]> {
-  const daysInMonth = new Date(year, month1indexed, 0).getDate();
-  const dateKeys = Array.from({ length: daysInMonth }, (_, i) => toDateKey(new Date(year, month1indexed - 1, i + 1)));
-
-  const [grouped, blockedDates] = await Promise.all([getVisitsGroupedByDate(dateKeys), getBlockedDates()]);
-  const blockedByDate = new Map(blockedDates.map((b) => [b.date, b.label]));
-
-  return dateKeys.map((dateKey) => {
-    const customers = grouped.get(dateKey) ?? [];
-    return {
-      date: dateKey,
-      count: customers.length,
-      blocked: blockedByDate.has(dateKey),
-      blockedLabel: blockedByDate.get(dateKey) ?? null,
-      customers: customers.map((s) => ({
-        id: s.id,
-        fullName: s.full_name,
-        houseNumber: s.house_number,
-        plan: s.plan,
-        block: s.block,
-      })),
-    };
-  });
-}
-
-export interface SlotLoad {
-  slot: number;
-  count: number;
-}
-
-/** Active-or-booked count per recurring slot (1-14) - what Rebalance operates on. A booked
- * customer already occupies a real day on that slot, same as an active one. */
-export async function getSlotLoads(): Promise<SlotLoad[]> {
-  const { rows } = await getPool().query<{ slot: number; count: string }>(
-    `select gs as slot, count(s.id) as count
-     from generate_series(1, $1::int) as gs
-     left join signups s on s.service_slot = gs and s.payment_status in ('active', 'booked') and s.paused_at is null
-     group by gs
-     order by gs`,
-    [SLOT_COUNT]
-  );
-  return rows.map((r) => ({ slot: r.slot, count: Number(r.count) }));
-}
-
-export interface RebalanceMove {
-  signupId: string;
+export interface CalendarPerson {
+  id: string;
   fullName: string;
   houseNumber: string;
-  fromSlot: number;
-  toSlot: number;
+  block: number | null;
+  plan: PlanId;
+}
+
+export interface CalendarServiced extends CalendarPerson {
+  worker: string | null;
+  note: string | null;
+}
+
+export interface CalendarDue extends CalendarPerson {
+  /** Due on a day that has passed with no visit recorded since. */
+  overdue: boolean;
+  /** Worked out by repeating the usual interval from the client's next date - not a date anyone has set. */
+  projected: boolean;
+}
+
+export interface ServiceCalendarDay {
+  date: string;
+  blocked: boolean;
+  blockedLabel: string | null;
+  serviced: CalendarServiced[];
+  due: CalendarDue[];
 }
 
 /**
- * Proposes moving customers off slots over `limit` onto slots with room, until balanced
- * or no more room is available. Slot reassignment (not a per-occurrence move) is what
- * keeps each customer's two monthly visits ~14 days apart, since a slot's two visit days
- * are always exactly 14 days apart by construction - moving a customer's slot moves both
- * future visits together. Prefers moving the most recently added customers on an
- * overloaded slot, on the theory that longer-standing customers are more disrupted by a
- * changed service day. Read-only - see applyRebalance for actually committing this.
+ * Owner month calendar covering every client: who was serviced on each day (a visit record exists) and who is
+ * due (their next service date falls there, or fell there and they are still overdue). Future months repeat
+ * each client's usual interval from their next date, marked projected so it is never mistaken for a booking.
  */
-export async function proposeRebalance(limit: number): Promise<RebalanceMove[]> {
-  const loads = await getSlotLoads();
-  const overloaded = loads.filter((l) => l.count > limit);
-  if (overloaded.length === 0) return [];
+export async function getServiceCalendar(year: number, month1: number): Promise<ServiceCalendarDay[]> {
+  const total = new Date(year, month1, 0).getDate();
+  const dateKeys = Array.from({ length: total }, (_, i) => toDateKey(new Date(year, month1 - 1, i + 1)));
+  const first = dateKeys[0];
+  const last = dateKeys[dateKeys.length - 1];
+  const todayKey = toDateKey(nowInJohannesburg());
+  const pool = getPool();
 
-  const underloaded = loads
-    .filter((l) => l.count < limit)
-    .map((l) => ({ slot: l.slot, room: limit - l.count }))
-    .sort((a, b) => b.room - a.room);
+  const [{ rows: clients }, { rows: visitRows }, ctx, drivenSkips, blockedDates, legacy] = await Promise.all([
+    pool.query<{
+      id: string;
+      full_name: string;
+      house_number: string;
+      block: number | null;
+      plan: PlanId;
+      paused: boolean;
+      next_service_date: string | null;
+      routing_from: string | null;
+    }>(
+      `select id, full_name, house_number, block, plan, paused_at is not null as paused,
+              next_service_date::text, routing_from::text
+       from signups where payment_status in ('active', 'booked')`
+    ),
+    pool.query<{
+      signup_id: string;
+      service_date: string;
+      crew: string | null;
+      note: string | null;
+      full_name: string;
+      house_number: string;
+      block: number | null;
+      plan: PlanId;
+    }>(
+      `select v.signup_id, v.service_date::text, v.crew, v.note, s.full_name, s.house_number, s.block, s.plan
+       from service_visits v join signups s on s.id = v.signup_id
+       where v.service_date between $1::date and $2::date
+       order by lower(s.full_name)`,
+      [first, last]
+    ),
+    getRoutingContext(),
+    getDrivenSkips(),
+    getBlockedDates(),
+    getVisitsGroupedByDate(dateKeys),
+  ]);
 
-  const { rows: candidates } = await getPool().query<{
+  const blockedByDate = new Map(blockedDates.map((b) => [b.date, b.label]));
+  const byId = new Map(clients.map((c) => [c.id, c]));
+  const days = new Map<string, ServiceCalendarDay>(
+    dateKeys.map((d) => [
+      d,
+      { date: d, blocked: blockedByDate.has(d), blockedLabel: blockedByDate.get(d) ?? null, serviced: [], due: [] },
+    ])
+  );
+  const servicedKey = new Set<string>();
+  for (const v of visitRows) {
+    servicedKey.add(`${v.signup_id}|${v.service_date}`);
+    days.get(v.service_date)?.serviced.push({
+      id: v.signup_id,
+      fullName: v.full_name,
+      houseNumber: v.house_number,
+      block: v.block,
+      plan: v.plan,
+      worker: v.crew,
+      note: v.note,
+    });
+  }
+  const person = (c: { id: string; full_name: string; house_number: string; block: number | null; plan: PlanId }): CalendarPerson => ({
+    id: c.id,
+    fullName: c.full_name,
+    houseNumber: c.house_number,
+    block: c.block,
+    plan: c.plan,
+  });
+
+  for (const c of clients) {
+    if (c.paused || !isDateDriven(c, "9999-12-31")) continue;
+    const due = effectiveDueDate(c.next_service_date!, drivenSkips.get(c.id) ?? [], ctx.workingDays, ctx.blocked);
+    // The date itself - unless a visit is already recorded that day, in which case they were serviced.
+    if (due >= first && due <= last && !servicedKey.has(`${c.id}|${due}`)) {
+      days.get(due)?.due.push({ ...person(c), overdue: due < todayKey, projected: false });
+    }
+    // Then repeat the usual interval, assuming each visit happens on its date (an overdue one, today at the latest).
+    let cursor = due < todayKey ? todayKey : due;
+    for (let i = 0; i < 40 && cursor <= last; i++) {
+      const projected = effectiveDueDate(suggestNextServiceDate(cursor), [], ctx.workingDays, ctx.blocked);
+      if (projected >= first && projected <= last && projected > todayKey) {
+        days.get(projected)?.due.push({ ...person(c), overdue: false, projected: true });
+      }
+      cursor = projected;
+    }
+  }
+
+  // Clients still on the old fixed days (and once-off bookings): whatever the old schedule says for today and
+  // later, minus anyone serviced. Days already gone show visit records only - the old schedule's guess about a
+  // past day is not a fact, and an overdue client is found by their next service date, never by a past slot.
+  for (const d of dateKeys) {
+    if (d < todayKey) continue;
+    for (const row of legacy.get(d) ?? []) {
+      const client = byId.get(row.id);
+      if (client && isDateDriven(client, d)) continue;
+      if (servicedKey.has(`${row.id}|${d}`)) continue;
+      days.get(d)?.due.push({
+        id: row.id,
+        fullName: row.full_name,
+        houseNumber: row.house_number,
+        block: row.block,
+        plan: row.plan,
+        overdue: false,
+        projected: false,
+      });
+    }
+  }
+
+  const byBlock = (x: CalendarPerson, y: CalendarPerson) =>
+    (x.block ?? Infinity) - (y.block ?? Infinity) || x.houseNumber.localeCompare(y.houseNumber, undefined, { numeric: true });
+  const out = dateKeys.map((d) => days.get(d)!);
+  for (const day of out) {
+    day.serviced.sort(byBlock);
+    day.due.sort(byBlock);
+  }
+  return out;
+}
+
+export interface ServiceStatusClient {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  block: number | null;
+  plan: PlanId;
+  paused: boolean;
+  lastVisitDate: string | null;
+  lastVisitWorker: string | null;
+  nextServiceDate: string | null;
+  overdueSince: string | null;
+}
+
+/** Every client with last service, who did it, next service date and overdue flag - overdue first, then soonest due. */
+export async function getServiceStatus(): Promise<{ clients: ServiceStatusClient[]; overdueCount: number }> {
+  const all = await getOpsClients();
+  const clients: ServiceStatusClient[] = all.map((c) => ({
+    id: c.id,
+    fullName: c.fullName,
+    houseNumber: c.houseNumber,
+    block: c.block,
+    plan: c.plan,
+    paused: c.paused,
+    lastVisitDate: c.lastVisitDate,
+    lastVisitWorker: c.lastVisitWorker,
+    nextServiceDate: c.nextServiceDate,
+    overdueSince: c.overdueSince,
+  }));
+  const overdue = groupByBlock(clients.filter((c) => c.overdueSince !== null)).flatMap((g) => g.customers);
+  const rest = clients
+    .filter((c) => c.overdueSince === null)
+    .sort((a, b) => {
+      if (a.nextServiceDate === b.nextServiceDate) return a.fullName.localeCompare(b.fullName);
+      if (a.nextServiceDate === null) return 1;
+      if (b.nextServiceDate === null) return -1;
+      return a.nextServiceDate < b.nextServiceDate ? -1 : 1;
+    });
+  return { clients: [...overdue, ...rest], overdueCount: overdue.length };
+}
+
+export interface SubscriptionRow {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  plan: PlanId;
+  method: SignupRow["payment_method"];
+  status: SignupRow["payment_status"];
+  paused: boolean;
+  /** The day the subscription started (first activation) - null until they are actually subscribed. */
+  subscribedOn: string | null;
+  /** The next debit - null once cancelled/archived and for anyone not subscribed yet. */
+  nextDebit: string | null;
+  lastPaymentFailed: boolean;
+}
+
+/**
+ * Every subscriber (monthly and annual) with the day they subscribed and their next debit. PayFast customers
+ * are anchored to the subscription date, EFT and cash customers roll forward from it - see lib/billing.ts.
+ */
+export async function getSubscriptions(): Promise<SubscriptionRow[]> {
+  const { rows } = await getPool().query<{
     id: string;
     full_name: string;
     house_number: string;
-    service_slot: number;
+    plan: PlanId;
+    payment_method: SignupRow["payment_method"];
+    payment_status: SignupRow["payment_status"];
+    paused: boolean;
+    start_date: string | null;
+    last_payment_failed_at: string | null;
   }>(
-    `select id, full_name, house_number, service_slot
+    `select id, full_name, house_number, plan, payment_method, payment_status, paused_at is not null as paused,
+            start_date::text, last_payment_failed_at
      from signups
-     where payment_status in ('active', 'booked') and paused_at is null
-       and service_slot = any($1::int[])
-     order by service_slot, created_at desc`,
-    [overloaded.map((l) => l.slot)]
+     where plan <> 'once-off' and payment_status in ('active', 'booked', 'cancelled', 'archived')`
   );
-
-  const candidatesBySlot = new Map<number, typeof candidates>();
-  for (const c of candidates) {
-    if (!candidatesBySlot.has(c.service_slot)) candidatesBySlot.set(c.service_slot, []);
-    candidatesBySlot.get(c.service_slot)!.push(c);
-  }
-
-  const moves: RebalanceMove[] = [];
-  let underloadedIndex = 0;
-  for (const slot of overloaded) {
-    let toShed = slot.count - limit;
-    const pool = candidatesBySlot.get(slot.slot) ?? [];
-    for (const candidate of pool) {
-      if (toShed <= 0) break;
-      // Skip past any underloaded slot that's already been filled.
-      while (underloadedIndex < underloaded.length && underloaded[underloadedIndex].room <= 0) {
-        underloadedIndex++;
-      }
-      if (underloadedIndex >= underloaded.length) break; // no more room anywhere
-      const target = underloaded[underloadedIndex];
-      moves.push({
-        signupId: candidate.id,
-        fullName: candidate.full_name,
-        houseNumber: candidate.house_number,
-        fromSlot: slot.slot,
-        toSlot: target.slot,
-      });
-      target.room -= 1;
-      toShed -= 1;
-    }
-  }
-  return moves;
-}
-
-/** Commits a set of moves the owner accepted from proposeRebalance's preview. */
-export async function applyRebalance(moves: { signupId: string; toSlot: number }[]): Promise<void> {
-  for (const move of moves) {
-    await getPool().query(
-      "update signups set service_slot = $2, updated_at = now() where id = $1 and payment_status in ('active', 'booked')",
-      [move.signupId, move.toSlot]
-    );
-    await retargetNextDateToSlot(move.signupId, move.toSlot);
-  }
+  const todayKey = toDateKey(nowInJohannesburg());
+  const list: SubscriptionRow[] = rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    plan: r.plan,
+    method: r.payment_method,
+    status: r.payment_status,
+    paused: r.paused,
+    subscribedOn: r.start_date,
+    nextDebit:
+      r.payment_status === "active" && r.start_date
+        ? nextDebitDate({ subscribedOn: r.start_date, plan: r.plan, method: r.payment_method, today: todayKey })
+        : null,
+    lastPaymentFailed: r.last_payment_failed_at !== null,
+  }));
+  const rank = (x: SubscriptionRow) => (x.nextDebit ? 0 : x.status === "booked" ? 1 : 2);
+  return list.sort((a, b) => {
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    if (a.nextDebit && b.nextDebit && a.nextDebit !== b.nextDebit) return a.nextDebit < b.nextDebit ? -1 : 1;
+    return a.fullName.localeCompare(b.fullName);
+  });
 }
 
 /** Same row shape as getAllCustomers, filtered to one customer - backs the owner profile page. */

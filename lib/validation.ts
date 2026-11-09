@@ -94,13 +94,6 @@ export const unblockDateSchema = z.object({
   date: z.string().regex(DATE_KEY_REGEX),
 });
 
-export const rebalanceApplySchema = z.object({
-  moves: z
-    .array(z.object({ signupId: z.string().uuid(), toSlot: z.number().int().min(1).max(14) }))
-    .min(1)
-    .max(50),
-});
-
 export const moveNextVisitSchema = z.object({
   signupId: z.string().uuid(),
   targetDate: z.string().regex(DATE_KEY_REGEX),

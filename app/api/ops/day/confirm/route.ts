@@ -9,11 +9,13 @@ export const runtime = "nodejs";
 const schema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   workerId: z.string().uuid(),
+  // Exactly the clients ticked on the review screen - nothing outside this list is ever recorded.
+  signupIds: z.array(z.string().uuid()).max(500),
 });
 
 /**
- * "Confirm day" - a bulk shortcut that writes a visit record (that date, the worker picked) for every client on
- * today's list who has none for the date yet. It stores nothing about the day itself.
+ * "Confirm day" - a bulk shortcut that writes a visit record (that date, the worker picked) for each client the
+ * owner ticked on the review screen, who has none for the date yet. It stores nothing about the day itself.
  */
 export async function POST(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -39,6 +41,6 @@ export async function POST(req: NextRequest) {
   const worker = await getWorker(parsed.data.workerId);
   if (!worker) return NextResponse.json({ error: "That worker isn't on the list any more. Pick another." }, { status: 400 });
 
-  const recorded = await confirmDay(parsed.data.date, worker.name);
+  const recorded = await confirmDay(parsed.data.date, worker.name, parsed.data.signupIds);
   return NextResponse.json({ ok: true, recorded });
 }
