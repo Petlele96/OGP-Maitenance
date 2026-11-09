@@ -11,6 +11,12 @@ import {
   nextWorkingDay,
   nowInJohannesburg,
   nextServiceDate,
+  nextOccurrenceForSlot,
+  suggestNextServiceDate,
+  isDateDriven,
+  effectiveDueDate,
+  dueStatusOn,
+  isWorkingDay,
   MIN_NOTICE_WORKING_DAYS,
   MOVED_REASON,
   BLOCKED_REASON,
@@ -158,9 +164,11 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
       : null;
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls this after the zod schema has confirmed agreedToTerms === true.
+  // A recurring client is tracked by their next service date from the start: the first slot visit.
+  const firstVisit = slot !== null ? toDateKey(nextOccurrenceForSlot(slot, now)) : null;
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11)
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date, next_service_date, routing_from)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12::date, $13::date)
      returning *`,
     [
       id,
@@ -174,6 +182,8 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
       input.block,
       input.paymentStatus,
       scheduledVisitDate,
+      firstVisit,
+      firstVisit ? toDateKey(now) : null,
     ]
   );
   return rows[0];
@@ -367,7 +377,9 @@ export interface ServiceVisitRow {
  * 'failed' (an abandoned or unconfirmed signup attempt, not a real relationship yet) and
  * 'cancelled' stay excluded.
  */
-export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRow[]> {
+export type PooledSignup = SignupRow & { next_due_key: string | null; routing_from_key: string | null };
+
+export async function getActiveVisitsForDates(dates: string[]): Promise<PooledSignup[]> {
   if (dates.length === 0) return [];
   const slots = Array.from(
     new Set(
@@ -376,8 +388,8 @@ export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRo
         .filter((s): s is number => s !== null)
     )
   );
-  const { rows } = await getPool().query<SignupRow>(
-    `select * from signups
+  const { rows } = await getPool().query<PooledSignup>(
+    `select *, next_service_date::text as next_due_key, routing_from::text as routing_from_key from signups
      where payment_status in ('active', 'booked')
        and paused_at is null
        and (
@@ -387,6 +399,7 @@ export async function getActiveVisitsForDates(dates: string[]): Promise<SignupRo
            select 1 from skipped_visits sv
            where sv.signup_id = signups.id and sv.rescheduled_date = any($2::date[])
          )
+         or (plan <> 'once-off' and next_service_date is not null and routing_from is not null)
        )`,
     [slots, dates]
   );
@@ -420,15 +433,10 @@ export interface DayYard {
   completedAt: string | null;
   reason: SkipOrMoveReason | null;
   rescheduledDate: string | null;
-}
-
-export interface DayConfirmation {
-  confirmedAt: string;
-  /** confirmed_at as a Johannesburg calendar date, for the "confirmed late" comparison. */
-  confirmedDate: string;
-  crew: string | null;
-  /** True once the day has been reopened for correction - it's outstanding again until re-confirmed. */
-  reopened: boolean;
+  /** Set when the client's due date is before this day (the day it was due) - they sit at the top, marked overdue. */
+  overdueSince: string | null;
+  /** True when the client is routed by their next service date rather than the old fixed slot. */
+  driven: boolean;
 }
 
 interface RoutePoolRow {
@@ -442,9 +450,49 @@ interface RoutePoolRow {
   payment_status: SignupRow["payment_status"];
   service_slot: number | null;
   scheduled_visit_date: string | null;
+  next_service_date: string | null;
+  routing_from: string | null;
   created_date: string;
   paused_date: string | null;
   cancelled_date: string | null;
+}
+
+export interface RoutingContext {
+  workingDays: number[];
+  blocked: Set<string>;
+}
+
+/** Working days and blocked dates - what decides whether a due date lands on a day the crew actually works. */
+async function getRoutingContext(): Promise<RoutingContext> {
+  const [{ workingDays }, blocked] = await Promise.all([getAppSettings(), getBlockedDateSet()]);
+  return { workingDays, blocked };
+}
+
+let routingContextCache: { at: number; value: RoutingContext } | null = null;
+/** Same, remembered for a few seconds - for loops that look up one customer at a time (owner dashboard). */
+async function getRoutingContextCached(): Promise<RoutingContext> {
+  if (routingContextCache && Date.now() - routingContextCache.at < 5000) return routingContextCache.value;
+  const value = await getRoutingContext();
+  routingContextCache = { at: Date.now(), value };
+  return value;
+}
+
+type DrivenSkips = Map<string, { original_date: string; rescheduled_date: string }[]>;
+
+/** Moves/flags made on or after each date-driven client's next service date - they decide the date the client is really due. */
+async function getDrivenSkips(): Promise<DrivenSkips> {
+  const { rows } = await getPool().query<{ signup_id: string; original_date: string; rescheduled_date: string }>(
+    `select sv.signup_id, sv.original_date::text, sv.rescheduled_date::text
+     from skipped_visits sv join signups s on s.id = sv.signup_id
+     where s.next_service_date is not null and sv.original_date >= s.next_service_date`
+  );
+  const map: DrivenSkips = new Map();
+  for (const r of rows) {
+    const list = map.get(r.signup_id) ?? [];
+    list.push({ original_date: r.original_date, rescheduled_date: r.rescheduled_date });
+    map.set(r.signup_id, list);
+  }
+  return map;
 }
 
 /**
@@ -462,10 +510,12 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
   if (dates.length === 0) return result;
 
   const pool = getPool();
-  const [{ rows: signups }, { rows: skips }, { rows: visits }] = await Promise.all([
+  const todayKey = toDateKey(nowInJohannesburg());
+  const [{ rows: signups }, { rows: skips }, { rows: visits }, ctx, drivenSkips] = await Promise.all([
     pool.query<RoutePoolRow>(
       `select id, full_name, house_number, whatsapp_number, block, plan, notes, payment_status,
               service_slot, scheduled_visit_date::text,
+              next_service_date::text, routing_from::text,
               (created_at at time zone 'Africa/Johannesburg')::date::text as created_date,
               (paused_at at time zone 'Africa/Johannesburg')::date::text as paused_date,
               (cancelled_at at time zone 'Africa/Johannesburg')::date::text as cancelled_date
@@ -482,7 +532,19 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
       "select signup_id, service_date::text, completed_at from service_visits where service_date = any($1::date[])",
       [dates]
     ),
+    getRoutingContext(),
+    getDrivenSkips(),
   ]);
+
+  const dueCache = new Map<string, string>();
+  const dueOf = (s: RoutePoolRow): string => {
+    let due = dueCache.get(s.id);
+    if (due === undefined) {
+      due = effectiveDueDate(s.next_service_date!, drivenSkips.get(s.id) ?? [], ctx.workingDays, ctx.blocked);
+      dueCache.set(s.id, due);
+    }
+    return due;
+  };
 
   const skipByKey = new Map(skips.map((k) => [`${k.signup_id}|${k.original_date}`, k]));
   const movedOnto = new Set(skips.map((k) => `${k.signup_id}|${k.rescheduled_date}`));
@@ -490,11 +552,14 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
 
   for (const date of dates) {
     const slot = candidateSlotForDate(new Date(`${date}T00:00:00`));
+    const workable = isWorkingDay(new Date(`${date}T00:00:00`), ctx.workingDays) && !ctx.blocked.has(date);
     const yards = result.get(date)!;
     for (const s of signups) {
       const key = `${s.id}|${date}`;
       const visit = visitByKey.get(key);
       const skip = skipByKey.get(key);
+      const driven = isDateDriven(s, date);
+      let overdueSince: string | null = null;
       if (!visit && !skip) {
         // Archived = off the schedule: no pending yards, past or future.
         if (s.payment_status === "archived") continue;
@@ -502,7 +567,16 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
           s.created_date <= date &&
           (s.paused_date === null || s.paused_date > date) &&
           (s.payment_status !== "cancelled" || (s.cancelled_date !== null && s.cancelled_date > date));
-        const due = (slot !== null && s.service_slot === slot) || s.scheduled_visit_date === date || movedOnto.has(key);
+        let due: boolean;
+        if (driven) {
+          // Routed by the next service date: due on it, or overdue if it has passed (never on a day off).
+          const dueDate = dueOf(s);
+          const status = dueStatusOn(date, todayKey, dueDate);
+          due = status !== "none" && (workable || dueDate === date);
+          if (due && status === "overdue") overdueSince = dueDate;
+        } else {
+          due = (slot !== null && s.service_slot === slot) || s.scheduled_visit_date === date || movedOnto.has(key);
+        }
         if (!eligible || !due) continue;
       }
       yards.push({
@@ -517,135 +591,111 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
         completedAt: visit?.completed_at ?? null,
         reason: !visit && skip ? skip.reason : null,
         rescheduledDate: !visit && skip ? skip.rescheduled_date : null,
+        overdueSince,
+        driven,
       });
     }
   }
   return result;
 }
 
-export async function getDayConfirmations(dates: string[]): Promise<Map<string, DayConfirmation>> {
-  if (dates.length === 0) return new Map();
-  const { rows } = await getPool().query<{
-    service_date: string;
-    confirmed_at: string;
-    confirmed_date: string;
-    crew: string | null;
-    reopened_at: string | null;
-  }>(
-    `select service_date::text, confirmed_at,
-            (confirmed_at at time zone 'Africa/Johannesburg')::date::text as confirmed_date,
-            crew, reopened_at
-     from day_confirmations
-     where service_date = any($1::date[])`,
-    [dates]
-  );
-  return new Map(
-    rows.map((r) => [
-      r.service_date,
-      { confirmedAt: r.confirmed_at, confirmedDate: r.confirmed_date, crew: r.crew, reopened: r.reopened_at !== null },
-    ])
-  );
-}
-
-/** One day's route as a single list in service order (block, then house number). */
-export async function getDayRoute(dateKey: string): Promise<{ yards: DayYard[]; confirmation: DayConfirmation | null }> {
-  const [routes, confirmations] = await Promise.all([getRoutesForDates([dateKey]), getDayConfirmations([dateKey])]);
-  const yards = groupByBlock(routes.get(dateKey) ?? []).flatMap((g) => g.customers);
-  return { yards, confirmation: confirmations.get(dateKey) ?? null };
+/**
+ * One day's route as a single list in service order: overdue yards first (marked), then the rest - each part
+ * by block, then house number, so the crew walks the estate in order rather than zigzagging by date.
+ */
+export async function getDayRoute(dateKey: string): Promise<{ yards: DayYard[] }> {
+  const routes = await getRoutesForDates([dateKey]);
+  const all = routes.get(dateKey) ?? [];
+  const inOrder = (list: DayYard[]) => groupByBlock(list).flatMap((g) => g.customers);
+  const yards = [...inOrder(all.filter((y) => y.overdueSince !== null)), ...inOrder(all.filter((y) => y.overdueSince === null))];
+  return { yards };
 }
 
 /**
- * "Confirm day": every yard not flagged gets a completion record carrying the service date, the
- * confirmation time and the crew. Never touches yards already flagged not-done. Confirming again
- * after a reopen is fine - existing completion rows are left alone and confirmed_at stays the
- * ORIGINAL confirmation time.
+ * THE one way work is marked done: a visit record against a client, with a date and a worker. Recording
+ * also sets the client's next service date (14 days on in September-April, 30 in May-August, from this
+ * date) - but only when it is their latest visit and they are a recurring, active or booked client, so a
+ * visit captured days late can never pull a date backwards.
+ *
+ * overwrite = true (Record a visit): the same client and date again corrects the worker and note.
+ * overwrite = false (Confirm day): a client who already has a record for that date is left exactly as is.
  */
-export async function confirmDay(dateKey: string, crew: string | null): Promise<void> {
+async function writeVisitRecord(input: {
+  signupId: string;
+  serviceDate: string;
+  worker: string;
+  note: string | null;
+  overwrite: boolean;
+}): Promise<{ inserted: boolean; nextDateUpdated: boolean }> {
+  const pool = getPool();
+  const { rows } = await pool.query<{ inserted: boolean }>(
+    `insert into service_visits (signup_id, service_date, crew, note)
+     values ($1, $2::date, $3, $4)
+     on conflict (signup_id, service_date) ${
+       input.overwrite ? "do update set crew = excluded.crew, note = excluded.note" : "do nothing"
+     }
+     returning (xmax = 0) as inserted`,
+    [input.signupId, input.serviceDate, input.worker, input.note]
+  );
+  // do nothing + conflict returns no row: the record was already there, so nothing is touched.
+  if (rows.length === 0) return { inserted: false, nextDateUpdated: false };
+  const advanced = await advanceNextServiceDates([input.signupId], input.serviceDate);
+  return { inserted: rows[0].inserted, nextDateUpdated: advanced > 0 };
+}
+
+/**
+ * "Confirm day": a bulk shortcut over the visit record - it writes one record, dated `dateKey` and credited
+ * to `worker`, for every client on that day's list who has no record for that date yet (overdue clients on
+ * the list included; flag a yard Not done first to leave it out). It keeps no state of its own: nothing is
+ * stored about the day, so there is no such thing as an unconfirmed or confirmed day. Returns records written.
+ */
+export async function confirmDay(dateKey: string, worker: string): Promise<number> {
   const { yards } = await getDayRoute(dateKey);
-  const pendingIds = yards.filter((y) => y.status === "pending").map((y) => y.id);
-  if (pendingIds.length > 0) {
-    await getPool().query(
-      `insert into service_visits (signup_id, service_date, confirmed_at, crew)
-       select unnest($1::uuid[]), $2::date, now(), $3
-       on conflict (signup_id, service_date) do nothing`,
-      [pendingIds, dateKey, crew]
-    );
+  let written = 0;
+  for (const y of yards) {
+    if (y.status !== "pending") continue;
+    const res = await writeVisitRecord({ signupId: y.id, serviceDate: dateKey, worker, note: null, overwrite: false });
+    if (res.inserted) written++;
   }
+  return written;
+}
+
+/**
+ * Sets the next service date (and starts date-based routing) for clients just recorded as done on `dateKey`.
+ * Skipped for once-off bookings, anyone not active/booked, and any client with a later visit already on
+ * record. Returns how many clients were updated.
+ */
+async function advanceNextServiceDates(signupIds: string[], dateKey: string): Promise<number> {
+  const { rowCount } = await getPool().query(
+    `update signups set next_service_date = $2::date, next_service_date_manual = false,
+            routing_from = coalesce(routing_from, $3::date), updated_at = now()
+     where id = any($1::uuid[]) and plan <> 'once-off' and payment_status in ('active', 'booked')
+       and not exists (select 1 from service_visits v where v.signup_id = signups.id and v.service_date > $3::date)`,
+    [signupIds, suggestNextServiceDate(dateKey), dateKey]
+  );
+  return rowCount ?? 0;
+}
+
+/**
+ * Undoing a completion (flagging Not done / moving that day) must put the client back on the list: their next
+ * date was already advanced by the completion, so it is pulled back to the day they were actually due. The
+ * move or flag row then decides when they are really due. Never done if a later visit is on record.
+ */
+async function restoreDueAfterUndo(signupId: string, dateKey: string): Promise<void> {
   await getPool().query(
-    `insert into day_confirmations (service_date, crew)
-     values ($1::date, $2)
-     on conflict (service_date) do update
-       set crew = coalesce(excluded.crew, day_confirmations.crew), reopened_at = null, updated_at = now()`,
-    [dateKey, crew]
+    `update signups set next_service_date = $2::date, next_service_date_manual = false, updated_at = now()
+     where id = $1 and plan <> 'once-off' and routing_from is not null and next_service_date > $2::date
+       and not exists (select 1 from service_visits v where v.signup_id = $1 and v.service_date > $2::date)`,
+    [signupId, dateKey]
   );
 }
 
-/** Opens a confirmed day back up for correction. No time limit - any day can be reopened, ever. */
-export async function reopenDay(dateKey: string): Promise<void> {
-  await getPool().query(
-    "update day_confirmations set reopened_at = now(), updated_at = now() where service_date = $1::date and reopened_at is null",
-    [dateKey]
-  );
-}
-
-/** Undo a "not done" flag: removes the skip, so the yard goes back to being assumed done on that day. */
+/** Undo a "not done" flag: removes the skip, so the yard is back on that day's list. */
 export async function unflagNotDone(signupId: string, dateKey: string): Promise<void> {
   await getPool().query("delete from skipped_visits where signup_id = $1 and original_date = $2::date", [
     signupId,
     dateKey,
   ]);
-}
-
-export interface OutstandingDay {
-  date: string;
-  yardCount: number;
-  notDoneCount: number;
-  reopened: boolean;
-}
-
-/**
- * Every past day with yards on its route that nobody has confirmed (or that was reopened and not
- * re-confirmed), oldest first. Today is excluded - it's still in progress - but becomes outstanding
- * tomorrow if left. Nothing is ever auto-confirmed: an unconfirmed day stays on this list until a
- * person confirms it, however old it gets (lookback is capped at a year to bound the query).
- */
-export async function getOutstandingDays(): Promise<OutstandingDay[]> {
-  const { rows } = await getPool().query<{ first_date: string | null }>(
-    `select min((created_at at time zone 'Africa/Johannesburg')::date)::text as first_date
-     from signups where payment_status in ('active', 'booked', 'cancelled', 'archived')`
-  );
-  const first = rows[0]?.first_date;
-  if (!first) return [];
-
-  const yesterday = nowInJohannesburg();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const lastKey = toDateKey(yesterday);
-  const earliest = new Date(yesterday);
-  earliest.setDate(earliest.getDate() - 365);
-  const cursor = new Date(`${first}T00:00:00`);
-  if (toDateKey(cursor) < toDateKey(earliest)) cursor.setTime(earliest.getTime());
-
-  const dates: string[] = [];
-  while (toDateKey(cursor) <= lastKey) {
-    dates.push(toDateKey(cursor));
-    cursor.setDate(cursor.getDate() + 1);
-  }
-
-  const [routes, confirmations] = await Promise.all([getRoutesForDates(dates), getDayConfirmations(dates)]);
-  const outstanding: OutstandingDay[] = [];
-  for (const date of dates) {
-    const yards = routes.get(date) ?? [];
-    if (yards.length === 0) continue;
-    const confirmation = confirmations.get(date);
-    if (confirmation && !confirmation.reopened) continue;
-    outstanding.push({
-      date,
-      yardCount: yards.length,
-      notDoneCount: yards.filter((y) => y.status === "not_done").length,
-      reopened: confirmation?.reopened ?? false,
-    });
-  }
-  return outstanding;
 }
 
 export interface SkippedVisitRow {
@@ -700,6 +750,7 @@ export async function recordSkippedVisit(
     signupId,
     originalDate,
   ]);
+  await restoreDueAfterUndo(signupId, originalDate);
   return insertOrUpdateSkip(signupId, originalDate, reason, rescheduledDate);
 }
 
@@ -719,6 +770,7 @@ export async function recordMovedVisit(
     signupId,
     originalDate,
   ]);
+  await restoreDueAfterUndo(signupId, originalDate);
   return insertOrUpdateSkip(signupId, originalDate, MOVED_REASON, targetDate);
 }
 
@@ -742,13 +794,28 @@ async function bulkMoveVisitsForDate(
      where s.payment_status in ('active', 'booked')
        and s.paused_at is null
        and (($4::int is not null and s.service_slot = $4) or s.scheduled_visit_date = $1::date)
+       and not (s.plan <> 'once-off' and s.next_service_date is not null and s.routing_from is not null and s.routing_from <= $1::date)
        and not exists (select 1 from service_visits v where v.signup_id = s.id and v.service_date = $1::date)
        and not exists (select 1 from skipped_visits sv where sv.signup_id = s.id and sv.original_date = $1::date)
      on conflict (signup_id, original_date) do nothing
      returning signup_id`,
     [dateKey, rescheduledKey, reason, slot]
   );
-  return rows.length;
+
+  // Clients routed by their next service date: everyone still pending on that day's list, overdue ones included.
+  const { yards } = await getDayRoute(dateKey);
+  const drivenIds = yards.filter((y) => y.driven && y.status === "pending").map((y) => y.id);
+  let drivenMoved = 0;
+  if (drivenIds.length > 0) {
+    const moved = await getPool().query(
+      `insert into skipped_visits (signup_id, original_date, reason, rescheduled_date)
+       select unnest($1::uuid[]), $2::date, $3, $4::date
+       on conflict (signup_id, original_date) do nothing`,
+      [drivenIds, dateKey, reason, rescheduledKey]
+    );
+    drivenMoved = moved.rowCount ?? 0;
+  }
+  return rows.length + drivenMoved;
 }
 
 /** "Postpone today" - moves everyone still due today to the next working day, for rain. */
@@ -1384,6 +1451,7 @@ export async function setServiceDay(
      where id = $1`,
     [signupId, serviceSlot ?? null, scheduledVisitDate ?? null]
   );
+  if (serviceSlot != null) await retargetNextDateToSlot(signupId, serviceSlot);
 }
 
 /** Only affects an 'active' row - pausing a booked/pending/cancelled customer has nothing to pause. */
@@ -1398,6 +1466,26 @@ export async function resumeSignup(id: string): Promise<void> {
   await getPool().query(
     "update signups set paused_at = null, updated_at = now() where id = $1",
     [id]
+  );
+  // A date that passed while they were paused must not come back as "overdue" - they are due from today.
+  await getPool().query(
+    `update signups set next_service_date = $2::date, next_service_date_manual = false
+     where id = $1 and plan <> 'once-off' and routing_from is not null and next_service_date < $2::date`,
+    [id, toDateKey(nowInJohannesburg())]
+  );
+}
+
+/**
+ * Routing is by next service date, so changing a client's fixed day (or Rebalance moving them) must move that
+ * date too - otherwise the change would silently do nothing. The new date is the slot's next visit from today.
+ */
+async function retargetNextDateToSlot(signupId: string, slot: number): Promise<void> {
+  const today = nowInJohannesburg();
+  await getPool().query(
+    `update signups set next_service_date = $2::date, next_service_date_manual = false,
+            routing_from = coalesce(routing_from, $3::date), updated_at = now()
+     where id = $1 and plan <> 'once-off' and payment_status in ('active', 'booked')`,
+    [signupId, toDateKey(nextOccurrenceForSlot(slot, today)), toDateKey(today)]
   );
 }
 
@@ -1509,10 +1597,28 @@ export async function getVisitsGroupedByDate(dates: string[]): Promise<Map<strin
     movedTo.get(row.signup_id)!.add(row.rescheduled_date);
   }
 
+  const [ctx, drivenSkips] = await Promise.all([getRoutingContext(), getDrivenSkips()]);
+  const todayKey = toDateKey(nowInJohannesburg());
+  const dueCache = new Map<string, string>();
+  const dueOf = (s: PooledSignup): string => {
+    let due = dueCache.get(s.id);
+    if (due === undefined) {
+      due = effectiveDueDate(s.next_due_key!, drivenSkips.get(s.id) ?? [], ctx.workingDays, ctx.blocked);
+      dueCache.set(s.id, due);
+    }
+    return due;
+  };
+
   const result = new Map<string, SignupRow[]>();
   for (const dateKey of dates) {
     const slot = candidateSlotForDate(new Date(`${dateKey}T00:00:00`));
+    const workable = isWorkingDay(new Date(`${dateKey}T00:00:00`), ctx.workingDays) && !ctx.blocked.has(dateKey);
     const customers = pool.filter((s) => {
+      if (isDateDriven({ plan: s.plan, next_service_date: s.next_due_key, routing_from: s.routing_from_key }, dateKey)) {
+        // Routed by the next service date: its own day, plus today's overdue (a forecast never repeats them).
+        const status = dueStatusOn(dateKey, todayKey, dueOf(s));
+        return status === "due" || (status === "overdue" && dateKey === todayKey && workable);
+      }
       if (movedAway.get(s.id)?.has(dateKey)) return false;
       if (movedTo.get(s.id)?.has(dateKey)) return true;
       return (slot !== null && s.service_slot === slot) || asDateKey(s.scheduled_visit_date) === dateKey;
@@ -1656,6 +1762,7 @@ export async function applyRebalance(moves: { signupId: string; toSlot: number }
       "update signups set service_slot = $2, updated_at = now() where id = $1 and payment_status in ('active', 'booked')",
       [move.signupId, move.toSlot]
     );
+    await retargetNextDateToSlot(move.signupId, move.toSlot);
   }
 }
 
@@ -1775,6 +1882,26 @@ export async function getEffectiveNextServiceDate(
   signup: { service_slot: number | null; scheduled_visit_date: string | null },
   from: Date
 ): Promise<Date | null> {
+  const { rows: meta } = await getPool().query<{
+    plan: string;
+    next_service_date: string | null;
+    routing_from: string | null;
+    skips: { original_date: string; rescheduled_date: string }[];
+  }>(
+    `select s.plan, s.next_service_date::text as next_service_date, s.routing_from::text as routing_from,
+            coalesce((select json_agg(json_build_object('original_date', sv.original_date::text, 'rescheduled_date', sv.rescheduled_date::text))
+                      from skipped_visits sv
+                      where sv.signup_id = s.id and s.next_service_date is not null and sv.original_date >= s.next_service_date), '[]'::json) as skips
+     from signups s where s.id = $1`,
+    [signupId]
+  );
+  const todayKey = toDateKey(from);
+  if (meta[0] && isDateDriven(meta[0], todayKey)) {
+    const ctx = await getRoutingContextCached();
+    const due = effectiveDueDate(meta[0].next_service_date!, meta[0].skips, ctx.workingDays, ctx.blocked);
+    // An overdue client is next seen today, not in the past.
+    return new Date(`${due < todayKey ? todayKey : due}T00:00:00`);
+  }
   const raw = nextServiceDate(signup, from);
   if (!raw) return null;
   let candidate = raw;
@@ -1993,4 +2120,219 @@ export async function moderateReview(id: string, action: ReviewAction, reply?: s
     ));
   }
   return (rowCount ?? 0) > 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Record a visit, next service date and workers (ops "Clients")
+// ---------------------------------------------------------------------------------------------
+
+export interface Worker {
+  id: string;
+  name: string;
+}
+
+export async function listWorkers(): Promise<Worker[]> {
+  const { rows } = await getPool().query<Worker>("select id, name from workers order by lower(name)");
+  return rows;
+}
+
+/** Null when a worker with that name (any capitalisation) is already on the list. */
+export async function addWorker(name: string): Promise<Worker | null> {
+  const { rows } = await getPool().query<Worker>(
+    "insert into workers (name) values ($1) on conflict do nothing returning id, name",
+    [name]
+  );
+  return rows[0] ?? null;
+}
+
+/** Past visits keep the worker's name (it is copied onto each visit), so removing someone changes no history. */
+export async function removeWorker(id: string): Promise<boolean> {
+  const { rowCount } = await getPool().query("delete from workers where id = $1", [id]);
+  return (rowCount ?? 0) > 0;
+}
+
+export async function getWorker(id: string): Promise<Worker | null> {
+  const { rows } = await getPool().query<Worker>("select id, name from workers where id = $1", [id]);
+  return rows[0] ?? null;
+}
+
+export interface OpsClient {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  block: number | null;
+  plan: PlanId;
+  paused: boolean;
+  lastVisitDate: string | null;
+  lastVisitWorker: string | null;
+  nextServiceDate: string | null;
+  nextServiceDateManual: boolean;
+  /** The day they are really due (their next date after any move, rolled off days off) - null if not date-routed. */
+  dueDate: string | null;
+  /** Set when that day has passed and they have no visit since: they are overdue. Never for paused clients. */
+  overdueSince: string | null;
+}
+
+/** Clients on the service list (active and booked). Last visit comes from the most recent visit record, whoever recorded it. */
+export async function getOpsClients(): Promise<OpsClient[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    block: number | null;
+    plan: PlanId;
+    paused: boolean;
+    last_visit_date: string | null;
+    last_visit_worker: string | null;
+    next_service_date: string | null;
+    next_service_date_manual: boolean;
+    routing_from: string | null;
+  }>(
+    `select s.id, s.full_name, s.house_number, s.block, s.plan, s.paused_at is not null as paused,
+            lv.service_date::text as last_visit_date, lv.crew as last_visit_worker,
+            s.next_service_date::text, s.next_service_date_manual, s.routing_from::text
+     from signups s
+     left join lateral (
+       select v.service_date, v.crew from service_visits v
+       where v.signup_id = s.id order by v.service_date desc limit 1
+     ) lv on true
+     where s.payment_status in ('active', 'booked')
+     order by lower(s.full_name)`
+  );
+  const [ctx, drivenSkips] = await Promise.all([getRoutingContext(), getDrivenSkips()]);
+  const todayKey = toDateKey(nowInJohannesburg());
+  return rows.map((r) => {
+    const driven = isDateDriven(r, todayKey);
+    const dueDate = driven
+      ? effectiveDueDate(r.next_service_date!, drivenSkips.get(r.id) ?? [], ctx.workingDays, ctx.blocked)
+      : null;
+    return {
+      id: r.id,
+      fullName: r.full_name,
+      houseNumber: r.house_number,
+      block: r.block,
+      plan: r.plan,
+      paused: r.paused,
+      lastVisitDate: r.last_visit_date,
+      lastVisitWorker: r.last_visit_worker,
+      nextServiceDate: r.next_service_date,
+      nextServiceDateManual: r.next_service_date_manual,
+      dueDate,
+      overdueSince: dueDate !== null && dueDate < todayKey && !r.paused ? dueDate : null,
+    };
+  });
+}
+
+/** Clients whose next service date has passed, in walking order (block, then house number). */
+export async function getOverdueClients(): Promise<OpsClient[]> {
+  const overdue = (await getOpsClients()).filter((c) => c.overdueSince !== null);
+  return groupByBlock(overdue).flatMap((g) => g.customers);
+}
+
+export interface ClientVisit {
+  serviceDate: string;
+  worker: string | null;
+  note: string | null;
+  confirmed: boolean;
+}
+
+/** One client plus their visit history, newest first. */
+export async function getOpsClientDetail(id: string): Promise<{ client: OpsClient; visits: ClientVisit[] } | null> {
+  const client = (await getOpsClients()).find((c) => c.id === id);
+  if (!client) return null;
+  const { rows } = await getPool().query<{
+    service_date: string;
+    crew: string | null;
+    note: string | null;
+    confirmed: boolean;
+  }>(
+    `select service_date::text, crew, note, confirmed_at is not null as confirmed
+     from service_visits where signup_id = $1 order by service_date desc limit 40`,
+    [id]
+  );
+  return {
+    client,
+    visits: rows.map((r) => ({ serviceDate: r.service_date, worker: r.crew, note: r.note, confirmed: r.confirmed })),
+  };
+}
+
+export type NextDateReason = "set" | "later_visit" | "once_off" | "inactive";
+
+export type RecordVisitResult =
+  | { ok: true; updatedExisting: boolean; nextServiceDate: string | null; nextDateUpdated: boolean; nextDateReason: NextDateReason }
+  | { ok: false; reason: "not_found" | "flagged" };
+
+/**
+ * "Record a visit": a service record for `serviceDate` (any past date), by `worker`, with an optional note.
+ * Recording the same date again corrects the worker/note instead of duplicating (one record per client per day).
+ * A yard flagged Not done or moved on that day is refused - that has to be unflagged on the day's route first,
+ * so a day can never say both done and not done.
+ *
+ * The next service date is then suggested from the recorded date, but only when this is the client's latest
+ * visit - capturing an old visit days late must not overwrite a date worked out from a newer one. It replaces
+ * a hand-set date too (that is what recording a visit means), and the owner can change it again at any time.
+ */
+export async function recordVisit(input: {
+  signupId: string;
+  serviceDate: string;
+  worker: string;
+  note: string | null;
+}): Promise<RecordVisitResult> {
+  const pool = getPool();
+  const { rows: signupRows } = await pool.query<{ payment_status: string; plan: string }>(
+    "select payment_status, plan from signups where id = $1",
+    [input.signupId]
+  );
+  if (!signupRows[0]) return { ok: false, reason: "not_found" };
+  const recurring = signupRows[0].plan !== "once-off";
+  const live = ["active", "booked"].includes(signupRows[0].payment_status);
+
+  const { rows: flagged } = await pool.query(
+    "select 1 from skipped_visits where signup_id = $1 and original_date = $2::date",
+    [input.signupId, input.serviceDate]
+  );
+  if (flagged.length > 0) return { ok: false, reason: "flagged" };
+
+  const written = await writeVisitRecord({
+    signupId: input.signupId,
+    serviceDate: input.serviceDate,
+    worker: input.worker,
+    note: input.note,
+    overwrite: true,
+  });
+  const rowCount = written.nextDateUpdated ? 1 : 0;
+
+  const { rows: current } = await pool.query<{ next_service_date: string | null }>(
+    "select next_service_date::text from signups where id = $1",
+    [input.signupId]
+  );
+  return {
+    ok: true,
+    updatedExisting: !written.inserted,
+    nextServiceDate: current[0]?.next_service_date ?? null,
+    nextDateUpdated: (rowCount ?? 0) > 0,
+    nextDateReason: (rowCount ?? 0) > 0 ? "set" : !recurring ? "once_off" : !live ? "inactive" : "later_visit",
+  };
+}
+
+/**
+ * Hand-set (or clear) the next service date. Never locked: recording a later visit recalculates it. Setting
+ * one starts routing by it from `todayKey`; clearing it hands the client back to the old fixed slot.
+ */
+export async function setNextServiceDate(
+  signupId: string,
+  date: string | null,
+  todayKey: string
+): Promise<"ok" | "not_found" | "once_off"> {
+  const { rows } = await getPool().query<{ plan: string }>("select plan from signups where id = $1", [signupId]);
+  if (!rows[0]) return "not_found";
+  if (rows[0].plan === "once-off") return "once_off";
+  await getPool().query(
+    `update signups set next_service_date = $2::date, next_service_date_manual = ($2::date is not null),
+            routing_from = case when $2::date is not null then coalesce(routing_from, $3::date) else routing_from end,
+            updated_at = now()
+     where id = $1`,
+    [signupId, date, todayKey]
+  );
+  return "ok";
 }

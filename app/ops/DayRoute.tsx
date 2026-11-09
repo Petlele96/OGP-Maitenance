@@ -17,6 +17,7 @@ interface Yard {
   completedAt: string | null;
   reason: SkipOrMoveReason | null;
   rescheduledDate: string | null;
+  overdueSince: string | null;
 }
 
 interface DayData {
@@ -24,7 +25,11 @@ interface DayData {
   isToday: boolean;
   isFuture: boolean;
   yards: Yard[];
-  confirmation: { confirmedAt: string; crew: string | null; reopened: boolean; late: boolean } | null;
+}
+
+interface Worker {
+  id: string;
+  name: string;
 }
 
 export interface MovedInfo {
@@ -45,7 +50,7 @@ const REASON_LABELS: Record<SkipOrMoveReason, string> = {
 };
 
 const PLAN_LABELS: Record<PlanId, string> = { monthly: "Monthly", annual: "Annual", "once-off": "Once-off" };
-const CREW_KEY = "ops_crew";
+const WORKER_KEY = "ops_last_worker";
 
 function shortDate(dateKey: string): string {
   return new Date(`${dateKey}T00:00:00`).toLocaleDateString(undefined, {
@@ -72,25 +77,24 @@ async function post(url: string, body: unknown): Promise<Response> {
 }
 
 /**
- * One day's route as a single list in service order. Every yard starts as "assumed done"; the
- * worker only flags the exceptions, then taps "Confirm day". Works for today and for any past
- * day (opened from the Outstanding tab) - nothing here is ever time-locked.
+ * Today's route as a single list in service order. The worker flags the exceptions, picks who did the
+ * route and taps "Confirm day" - a shortcut that writes one visit record (today's date, that worker) for
+ * every client still on the list. Nothing is stored about the day itself.
  */
 export default function DayRoute({
   date,
-  onBack,
   onMoved,
   onChanged,
   onUnauthorized,
 }: {
   date: string;
-  onBack?: () => void;
   onMoved: (info: MovedInfo) => void;
   onChanged: () => void;
   onUnauthorized: () => void;
 }) {
   const [data, setData] = useState<DayData | null>(null);
-  const [crew, setCrew] = useState("");
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [workerId, setWorkerId] = useState("");
   const [pickingId, setPickingId] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveDate, setMoveDate] = useState("");
@@ -114,11 +118,18 @@ export default function DayRoute({
   }, [load]);
 
   useEffect(() => {
-    try {
-      setCrew(localStorage.getItem(CREW_KEY) ?? "");
-    } catch {
-      /* storage unavailable - crew just starts blank */
-    }
+    (async () => {
+      const res = await fetch("/api/ops/workers", { cache: "no-store" });
+      if (!res.ok) return;
+      const list: Worker[] = (await res.json()).workers;
+      setWorkers(list);
+      try {
+        const last = localStorage.getItem(WORKER_KEY);
+        if (last && list.some((w) => w.id === last)) setWorkerId(last);
+      } catch {
+        /* storage unavailable - the picker just starts empty */
+      }
+    })();
   }, []);
 
   async function run(fn: () => Promise<Response>) {
@@ -146,19 +157,14 @@ export default function DayRoute({
   }
 
   async function confirmDay() {
+    if (!workerId) return;
     setConfirming(true);
     try {
-      localStorage.setItem(CREW_KEY, crew.trim());
+      localStorage.setItem(WORKER_KEY, workerId);
     } catch {
       /* ignore */
     }
-    await run(() => post("/api/ops/day/confirm", { date, crew: crew.trim() || null }));
-    setConfirming(false);
-  }
-
-  async function reopenDay() {
-    setConfirming(true);
-    await run(() => post("/api/ops/day/reopen", { date }));
+    await run(() => post("/api/ops/day/confirm", { date, workerId }));
     setConfirming(false);
   }
 
@@ -184,21 +190,14 @@ export default function DayRoute({
 
   if (!data) return <p className="mt-8 text-center text-sm text-brand-500">Loading...</p>;
 
-  const { yards, confirmation } = data;
-  const confirmed = confirmation !== null && !confirmation.reopened;
-  const editable = !confirmed && !data.isFuture;
+  const { yards } = data;
+  const editable = !data.isFuture;
   const notDone = yards.filter((y) => y.status === "not_done");
-  const doneCount = yards.length - notDone.length;
   const pendingCount = yards.filter((y) => y.status === "pending").length;
+  const doneCount = yards.filter((y) => y.status === "done").length;
 
   return (
     <div className="flex flex-col gap-4">
-      {onBack && (
-        <button onClick={onBack} className="self-start text-sm font-medium text-brand-500 underline">
-          ← Back to outstanding days
-        </button>
-      )}
-
       <div>
         <h2 className="text-base font-bold text-brand-900">
           {new Date(`${data.date}T00:00:00`).toLocaleDateString(undefined, {
@@ -208,9 +207,6 @@ export default function DayRoute({
           })}
           {data.isToday && <span className="ml-2 text-xs font-semibold text-brand-500">Today</span>}
         </h2>
-        {confirmation?.reopened && (
-          <p className="mt-1 text-xs font-semibold text-brand-600">Reopened - confirm again when you've finished correcting it.</p>
-        )}
         {data.isFuture && <p className="mt-1 text-xs text-brand-500">This day hasn&apos;t happened yet.</p>}
       </div>
 
@@ -220,64 +216,37 @@ export default function DayRoute({
         <p className="mt-4 text-center text-sm text-brand-500">No visits scheduled for this day.</p>
       ) : (
         <>
-          {confirmed && confirmation ? (
-            <div className="rounded-2xl bg-brand-50 p-4 ring-1 ring-brand-100">
-              <p className="text-lg font-bold text-brand-900">
-                {doneCount} done, {notDone.length} not done
-              </p>
-              <p className="mt-1 text-xs text-brand-600">
-                Confirmed {shortDate(confirmation.confirmedAt.slice(0, 10))} at {timeOf(confirmation.confirmedAt)}
-                {confirmation.crew && <> · Crew: {confirmation.crew}</>}
-                {confirmation.late && (
-                  <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">
-                    confirmed late
-                  </span>
-                )}
-              </p>
-              {notDone.length > 0 && (
-                <ul className="mt-3 flex flex-col gap-1 text-sm text-brand-800">
-                  {notDone.map((y) => (
-                    <li key={y.id}>
-                      {y.fullName} <span className="text-brand-500">· House {y.houseNumber}</span> -{" "}
-                      <span className="font-medium">{y.reason ? REASON_LABELS[y.reason] : "Not done"}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <button
-                onClick={reopenDay}
-                disabled={confirming}
-                className="mt-4 rounded-lg border-2 border-brand-300 px-4 py-2 text-sm font-semibold text-brand-700 disabled:opacity-60"
-              >
-                Reopen to correct
-              </button>
-            </div>
-          ) : editable ? (
+          {editable && pendingCount > 0 ? (
             <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
               <label className="block text-xs font-medium text-brand-600">
-                Crew
-                <input
-                  value={crew}
-                  onChange={(e) => setCrew(e.target.value)}
-                  placeholder="Who did this route?"
-                  className="mt-1 w-full rounded-lg border border-brand-200 px-3 py-2 text-base text-brand-900 outline-none focus:border-brand-500"
-                />
+                Who did this route?
+                <select
+                  value={workerId}
+                  onChange={(e) => setWorkerId(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-brand-200 bg-white px-3 py-2 text-base text-brand-900 outline-none focus:border-brand-500"
+                >
+                  <option value="">{workers.length === 0 ? "Add a worker in the Clients tab first" : "Choose a worker"}</option>
+                  {workers.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
               </label>
               <button
                 onClick={confirmDay}
-                disabled={confirming}
+                disabled={confirming || !workerId}
                 className="mt-3 h-14 w-full rounded-xl bg-brand-600 text-lg font-bold text-white shadow-sm disabled:opacity-60"
               >
-                {confirming ? "Confirming..." : "Confirm day"}
+                {confirming ? "Recording..." : "Confirm day"}
               </button>
               <p className="mt-2 text-center text-xs text-brand-600">
-                {doneCount} done · {notDone.length} not done
-                {pendingCount > 0 && <> · {pendingCount} will be recorded as done</>}
+                {doneCount} done · {notDone.length} not done · {pendingCount} will get a visit record dated today
               </p>
             </div>
           ) : null}
 
-          {editable && data.isToday && pendingCount > 0 && (
+          {data.isToday && pendingCount > 0 && (
             <button
               onClick={postponeToday}
               disabled={postponing}
@@ -297,7 +266,14 @@ export default function DayRoute({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-semibold text-brand-900">{y.fullName}</p>
+                    <p className="font-semibold text-brand-900">
+                      {y.fullName}
+                      {y.overdueSince && (
+                        <span className="ml-2 rounded-md bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-800">
+                          Overdue since {shortDate(y.overdueSince)}
+                        </span>
+                      )}
+                    </p>
                     <p className="text-sm text-brand-700">
                       House {y.houseNumber}
                       {y.block !== null && <span className="text-brand-400"> · Block {y.block}</span>}
@@ -327,7 +303,7 @@ export default function DayRoute({
                       </span>
                     ) : (
                       <span className="rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-medium text-brand-600">
-                        ✓ {confirmed ? "Not recorded" : "Assumed done"}
+                        {y.overdueSince ? "Overdue" : "Due"}
                       </span>
                     )}
 

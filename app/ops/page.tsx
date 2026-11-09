@@ -4,20 +4,14 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { buildReminderLink, buildWhatsAppChatLink, buildDateChangedLink } from "@/lib/site";
 import type { PlanId } from "@/lib/plans";
 import DayRoute, { type MovedInfo } from "./DayRoute";
+import ClientsTab from "./ClientsTab";
 
-type ViewMode = "today" | "tomorrow" | "week" | "booked" | "outstanding";
+type ViewMode = "today" | "tomorrow" | "week" | "booked" | "overdue" | "clients";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
 
 interface BlockGroup<T> {
   block: number | null;
   customers: T[];
-}
-
-interface OutstandingDay {
-  date: string;
-  yardCount: number;
-  notDoneCount: number;
-  reopened: boolean;
 }
 
 interface TomorrowCustomer {
@@ -97,9 +91,7 @@ export default function OpsPage() {
   const [tomorrow, setTomorrow] = useState<TomorrowData | null>(null);
   const [week, setWeek] = useState<WeekDay[] | null>(null);
   const [booked, setBooked] = useState<BookedData | null>(null);
-  const [outstanding, setOutstanding] = useState<OutstandingDay[] | null>(null);
-  const [openDate, setOpenDate] = useState<string | null>(null);
-  const [pickDate, setPickDate] = useState("");
+  const [overdueCount, setOverdueCount] = useState<number | null>(null);
   const [sendingLinkId, setSendingLinkId] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveDate, setMoveDate] = useState("");
@@ -107,14 +99,14 @@ export default function OpsPage() {
   const [movedCustomer, setMovedCustomer] = useState<MovedInfo | null>(null);
 
   // Also serves as the auth probe for the whole page - 401 here shows the login screen.
-  const loadOutstanding = useCallback(async () => {
-    const res = await fetch("/api/ops/outstanding", { cache: "no-store" });
+  const loadOverdue = useCallback(async () => {
+    const res = await fetch("/api/ops/overdue", { cache: "no-store" });
     if (res.status === 401) {
       setAuthState("unauthenticated");
       return;
     }
     const json = await res.json();
-    setOutstanding(json.days);
+    setOverdueCount(json.count);
     setAuthState("authenticated");
   }, []);
 
@@ -149,8 +141,8 @@ export default function OpsPage() {
   }, []);
 
   useEffect(() => {
-    loadOutstanding();
-  }, [loadOutstanding]);
+    loadOverdue();
+  }, [loadOverdue]);
 
   useEffect(() => {
     if (authState !== "authenticated") return;
@@ -174,7 +166,7 @@ export default function OpsPage() {
       return;
     }
     setPassword("");
-    await loadOutstanding();
+    await loadOverdue();
   }
 
   async function handleSendPaymentLink(signupId: string) {
@@ -240,12 +232,7 @@ export default function OpsPage() {
     setTomorrow(null);
     setWeek(null);
     setBooked(null);
-    setOutstanding(null);
-    setOpenDate(null);
-  }
-
-  function openAnyDay() {
-    if (pickDate) setOpenDate(pickDate);
+    setOverdueCount(null);
   }
 
   if (authState === "checking") {
@@ -302,15 +289,13 @@ export default function OpsPage() {
             ["tomorrow", "Tomorrow"],
             ["week", "Week"],
             ["booked", "Booked"],
-            ["outstanding", outstanding && outstanding.length > 0 ? `Outstanding (${outstanding.length})` : "Outstanding"],
+            ["overdue", overdueCount && overdueCount > 0 ? `Overdue (${overdueCount})` : "Overdue"],
+            ["clients", "Clients"],
           ] as [ViewMode, string][]
         ).map(([mode, label]) => (
           <button
             key={mode}
-            onClick={() => {
-              setView(mode);
-              if (mode !== "outstanding") setOpenDate(null);
-            }}
+            onClick={() => setView(mode)}
             className={`flex-1 rounded-lg px-1 py-2 text-xs font-semibold ${view === mode ? "bg-brand-600 text-white" : "text-brand-700"}`}
           >
             {label}
@@ -345,80 +330,14 @@ export default function OpsPage() {
         <DayRoute
           date="today"
           onMoved={setMovedCustomer}
-          onChanged={loadOutstanding}
+          onChanged={loadOverdue}
           onUnauthorized={handleUnauthorized}
         />
       )}
 
-      {view === "outstanding" &&
-        (openDate ? (
-          <DayRoute
-            date={openDate}
-            onBack={() => setOpenDate(null)}
-            onMoved={setMovedCustomer}
-            onChanged={loadOutstanding}
-            onUnauthorized={handleUnauthorized}
-          />
-        ) : (
-          <div className="flex flex-col gap-4">
-            <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
-              <p className="text-xs font-semibold text-brand-700">Open any day</p>
-              <div className="mt-2 flex gap-2">
-                <input
-                  type="date"
-                  value={pickDate}
-                  max={new Date().toISOString().slice(0, 10)}
-                  onChange={(e) => setPickDate(e.target.value)}
-                  className="flex-1 rounded-lg border border-brand-200 px-2 py-2 text-sm text-brand-900"
-                />
-                <button
-                  onClick={openAnyDay}
-                  disabled={!pickDate}
-                  className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  Open
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-brand-500">
-                Any day can be opened, confirmed or corrected - nothing is ever locked.
-              </p>
-            </div>
+      {view === "clients" && <ClientsTab mode="all" onChanged={loadOverdue} onUnauthorized={handleUnauthorized} />}
+      {view === "overdue" && <ClientsTab mode="overdue" onChanged={loadOverdue} onUnauthorized={handleUnauthorized} />}
 
-            {outstanding === null ? (
-              <p className="mt-4 text-center text-sm text-brand-500">Loading...</p>
-            ) : outstanding.length === 0 ? (
-              <p className="mt-4 text-center text-sm text-brand-500">All caught up - no unconfirmed days.</p>
-            ) : (
-              <>
-                <p className="text-sm text-brand-600">
-                  {outstanding.length} unconfirmed day{outstanding.length === 1 ? "" : "s"}, oldest first.
-                </p>
-                <ul className="flex flex-col gap-3">
-                  {outstanding.map((d) => (
-                    <li key={d.date}>
-                      <button
-                        onClick={() => setOpenDate(d.date)}
-                        className="flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left shadow-sm ring-1 ring-brand-100"
-                      >
-                        <span>
-                          <span className="block font-semibold text-brand-900">{formatDayHeading(d.date)}</span>
-                          <span className="block text-sm text-brand-600">
-                            {d.yardCount} yard{d.yardCount === 1 ? "" : "s"}
-                            {d.notDoneCount > 0 && <> · {d.notDoneCount} flagged not done</>}
-                            {d.reopened && <> · reopened</>}
-                          </span>
-                        </span>
-                        <span className="ml-3 shrink-0 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white">
-                          Open
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-          </div>
-        ))}
 
 {view === "tomorrow" && (
         <>

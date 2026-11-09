@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/ops-auth";
-import { getOutstandingDays } from "@/lib/db";
+import { getOverdueClients } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-/** Every unconfirmed past day, oldest first. Also doubles as the ops page's auth probe. */
+/** Clients whose next service date has passed. Also doubles as the ops page's auth probe. */
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const days = await getOutstandingDays();
-  return NextResponse.json({ count: days.length, days });
+  const clients = await getOverdueClients();
+  return NextResponse.json({ count: clients.length, clients });
 }

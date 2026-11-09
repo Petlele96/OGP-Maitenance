@@ -165,14 +165,88 @@ export function getWeekDates(date: Date): Date[] {
   });
 }
 
-/** A day confirmed more than this many days after its service date is marked "confirmed late" - informational only, never blocks or warns. */
-export const LATE_CONFIRMATION_DAYS = 2;
-
-/** Both arguments are 'YYYY-MM-DD' Johannesburg calendar dates. */
-export function isConfirmedLate(serviceDate: string, confirmedDate: string): boolean {
-  const days = (Date.parse(`${confirmedDate}T00:00:00Z`) - Date.parse(`${serviceDate}T00:00:00Z`)) / 86400000;
-  return days > LATE_CONFIRMATION_DAYS;
-}
-
 /** A booking still unpaid after this many days is flagged on the owner side, so it can be chased or archived. */
 export const AWAITING_PAYMENT_FLAG_DAYS = 7;
+
+/** Days from a recorded visit to the suggested next one: 14 September to April, 30 May to August (winter). */
+export const NEXT_SERVICE_DAYS_SUMMER = 14;
+export const NEXT_SERVICE_DAYS_WINTER = 30;
+
+/**
+ * The suggested next service date for a visit done on `serviceDateKey` (YYYY-MM-DD). The month of the
+ * recorded service date picks the interval - not the month the next visit lands in, and not today's.
+ * It is only ever a suggestion: the owner can overwrite it by hand.
+ */
+export function suggestNextServiceDate(serviceDateKey: string): string {
+  const [year, month, day] = serviceDateKey.split("-").map(Number);
+  const days = isWinterMonth(month - 1) ? NEXT_SERVICE_DAYS_WINTER : NEXT_SERVICE_DAYS_SUMMER;
+  const next = new Date(Date.UTC(year, month - 1, day + days));
+  const mm = String(next.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(next.getUTCDate()).padStart(2, "0");
+  return `${next.getUTCFullYear()}-${mm}-${dd}`;
+}
+
+/**
+ * Date-driven routing. A client is "date-driven" on a day once they have a next service date and that day is
+ * on or after routing_from. Until then (and for once-off bookings, which never recur) the old fixed slot
+ * decides. Keeping the cut-over per client means no past day is ever re-written.
+ */
+export function isDateDriven(
+  client: { plan: string; next_service_date: string | null; routing_from: string | null },
+  dateKey: string
+): boolean {
+  return (
+    client.plan !== "once-off" &&
+    client.next_service_date !== null &&
+    client.routing_from !== null &&
+    dateKey >= client.routing_from
+  );
+}
+
+function addDaysKey(dateKey: string, days: number): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + days));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
+}
+
+function weekdayOfKey(dateKey: string): number {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+/**
+ * The day a client is actually due: their next service date, unless a visit on or after that date was
+ * moved or flagged Not done (then the date it was moved to wins - the latest such move). A plain date that
+ * lands on a non-working or blocked day rolls forward to the next working, unblocked day, so nobody is
+ * "overdue" for a Sunday. A date the operator picked deliberately (a move) is used exactly as chosen.
+ */
+export function effectiveDueDate(
+  nextServiceDateKey: string,
+  skips: { original_date: string; rescheduled_date: string }[],
+  workingDays: number[],
+  blocked: ReadonlySet<string>
+): string {
+  const relevant = skips.filter((s) => s.original_date >= nextServiceDateKey);
+  if (relevant.length > 0) {
+    relevant.sort((a, b) => (a.original_date < b.original_date ? 1 : a.original_date > b.original_date ? -1 : 0));
+    return relevant[0].rescheduled_date;
+  }
+  let day = nextServiceDateKey;
+  for (let i = 0; i < 366; i++) {
+    if (workingDays.includes(weekdayOfKey(day)) && !blocked.has(day)) return day;
+    day = addDaysKey(day, 1);
+  }
+  return nextServiceDateKey;
+}
+
+/**
+ * Where a client with effective due date `due` sits on the list for `dateKey`:
+ * - a day that is today or earlier (a day still to confirm) lists everyone due on or before it, the ones due
+ *   earlier flagged "overdue";
+ * - a day still ahead lists only those due exactly that day - an overdue yard is today's job, not a forecast.
+ */
+export function dueStatusOn(dateKey: string, todayKey: string, due: string): "none" | "due" | "overdue" {
+  if (due === dateKey) return "due";
+  if (dateKey <= todayKey && due < dateKey) return "overdue";
+  return "none";
+}

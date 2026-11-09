@@ -224,3 +224,30 @@ create index if not exists signups_whatsapp_idx on signups (whatsapp_number);
 alter table reviews enable row level security;
 drop policy if exists "deny_anonymous_access" on reviews;
 create policy "deny_anonymous_access" on reviews for all to anon, authenticated using (false);
+
+-- Record a visit: the owner can capture a visit after the fact, by a named worker, with an optional note.
+-- The worker's name is stored on the visit itself (the existing crew column) so removing a worker from
+-- the list later never changes the history. A note is optional.
+alter table service_visits add column if not exists note text;
+
+-- The workers list feeds the "who did the job" picker and nothing else.
+create table if not exists workers (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists workers_name_idx on workers (lower(name));
+alter table workers enable row level security;
+drop policy if exists "deny_anonymous_access" on workers;
+create policy "deny_anonymous_access" on workers for all to anon, authenticated using (false);
+
+-- The client's next service date. It is calculated from the last recorded visit (a suggestion) and the owner
+-- can overwrite it by hand at any time - the manual flag only records which of the two it currently is.
+-- It decides which day a client appears on (see routing_from below) and when they count as overdue.
+alter table signups add column if not exists next_service_date date;
+alter table signups add column if not exists next_service_date_manual boolean not null default false;
+
+-- The next service date drives the day lists. routing_from is the first day a client is routed by that date
+-- (earlier days keep being rebuilt from the old fixed slot, so history is untouched).
+-- The day_confirmations table is no longer written or read. It is kept as it is so no data is lost.
+alter table signups add column if not exists routing_from date;

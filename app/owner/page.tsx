@@ -80,7 +80,7 @@ interface DashboardData {
   completion: { done: number; scheduled: number };
   unwelcomedCustomers: UnwelcomedCustomer[];
   skippedVisits: SkippedVisit[];
-  outstandingDays: number;
+  overdueCount: number;
   bookedCount: number;
   bookedCustomers: BookedCustomer[];
 }
@@ -406,15 +406,15 @@ export default function OwnerPage() {
           <a
             href="/ops"
             className={`block rounded-2xl p-4 shadow-sm ring-1 ${
-              data.outstandingDays > 0 ? "bg-white ring-brand-300" : "bg-white ring-brand-100"
+              data.overdueCount > 0 ? "bg-red-50 ring-red-200" : "bg-white ring-brand-100"
             }`}
           >
-            <p className="text-xs font-medium text-brand-500">Outstanding days</p>
-            <p className="mt-1 text-2xl font-bold text-brand-900">{data.outstandingDays}</p>
+            <p className="text-xs font-medium text-brand-500">Overdue clients</p>
+            <p className="mt-1 text-2xl font-bold text-brand-900">{data.overdueCount}</p>
             <p className="mt-0.5 text-xs text-brand-600">
-              {data.outstandingDays === 0
-                ? "Every past day has been confirmed."
-                : "unconfirmed - clear them from the Outstanding tab on the operations page"}
+              {data.overdueCount === 0
+                ? "Nobody is past their next service date."
+                : "past their next service date - see the Overdue tab on the operations page"}
             </p>
           </a>
 

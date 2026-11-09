@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/ops-auth";
-import { reopenDay } from "@/lib/db";
+import { removeWorker } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+const schema = z.object({ id: z.string().uuid() });
 
-/** Reopens a confirmed day for correction - never locked, no time limit. */
+/** Removes a name from the picker. Visits already recorded keep that worker's name. */
 export async function POST(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -17,10 +17,9 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
-
   const parsed = schema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: "Missing or invalid date" }, { status: 400 });
+  if (!parsed.success) return NextResponse.json({ error: "Missing worker id" }, { status: 400 });
 
-  await reopenDay(parsed.data.date);
+  await removeWorker(parsed.data.id);
   return NextResponse.json({ ok: true });
 }

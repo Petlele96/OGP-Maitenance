@@ -127,3 +127,16 @@ export const reviewSchema = z.object({
   // Honeypot: a real person never sees or fills this. A bot that fills every field does.
   website: z.string().optional(),
 });
+
+/** Earliest date the owner can record a visit or next service date for - guards against a mistyped year. */
+export const MIN_RECORDABLE_DATE = "2020-01-01";
+
+/** A real calendar date as YYYY-MM-DD (so 2026-02-31 is rejected, not silently rolled into March). */
+export const dateKeySchema = z
+  .string()
+  .regex(DATE_KEY_REGEX, "Enter a valid date")
+  .refine((value) => {
+    const [y, m, d] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(y, m - 1, d));
+    return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  }, "Enter a valid date");
