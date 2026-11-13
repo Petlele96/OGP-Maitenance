@@ -7,7 +7,6 @@ import {
   toDateKey,
   visitDaysForSlotInMonth,
   candidateSlotForDate,
-  eligibleSlotsForNewSignup,
   addWorkingDays,
   nextWorkingDay,
   nowInJohannesburg,
@@ -82,31 +81,13 @@ export interface SignupRow {
   payment_link_expires_at: string | null;
   payment_link_sent_at: string | null;
   payment_method: "payfast" | "eft" | "cash";
+  payment_timing: "pay_now" | "pay_after_service";
   notes: string | null;
   paused_at: string | null;
   tracking_token: string;
   last_contacted_at: string | null;
   created_at: string;
   updated_at: string;
-}
-
-/**
- * The least-loaded slot among `eligibleSlots`, ties broken by lowest slot number.
- * Restricted to slots that still give at least MIN_NOTICE_WORKING_DAYS of notice (see
- * eligibleSlotsForNewSignup) - load-balancing only ever chooses among those, so a new
- * signup's first visit never lands too soon.
- */
-async function pickLeastLoadedSlot(eligibleSlots: number[]): Promise<number> {
-  const { rows } = await getPool().query<{ slot: number; count: string }>(
-    `select gs as slot, count(s.id) as count
-     from unnest($1::int[]) as gs
-     left join signups s on s.service_slot = gs and s.payment_status in ('active', 'booked')
-     group by gs
-     order by count(s.id) asc, gs asc
-     limit 1`,
-    [eligibleSlots]
-  );
-  return rows[0].slot;
 }
 
 /**
@@ -137,6 +118,7 @@ interface InsertSignupInput {
   amount: number;
   block: number | null;
   paymentStatus: "pending" | "booked";
+  paymentTiming: "pay_now" | "pay_after_service";
 }
 
 /**
@@ -151,10 +133,9 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
   const id = randomUUID();
   const { workingDays } = await getAppSettings();
   const now = nowInJohannesburg();
-  // Once-off bookings don't recur, so there's no bi-monthly slot to assign.
-  const slot = isSubscriberPlan(input.plan)
-    ? await pickLeastLoadedSlot(eligibleSlotsForNewSignup(now, workingDays))
-    : null;
+  // No subscriber is given a service day on booking, whatever they chose or paid: monthly and annual customers are
+  // created "to be scheduled" (no slot, no next service date) and the owner assigns the date from the dashboard.
+  // Once-off bookings don't recur, so they have no slot either.
   // A booked once-off gets its service day reserved up front too, same as monthly/annual
   // get their slot at booking time - "given a service day" shouldn't depend on which plan
   // was picked. The direct pay-now once-off flow is untouched: it still waits for
@@ -165,11 +146,9 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
       : null;
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls this after the zod schema has confirmed agreedToTerms === true.
-  // A recurring client is tracked by their next service date from the start: the first slot visit.
-  const firstVisit = slot !== null ? toDateKey(nextOccurrenceForSlot(slot, now)) : null;
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date, next_service_date, routing_from)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12::date, $13::date)
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date, next_service_date, routing_from, payment_timing)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12::date, $13::date, $14)
      returning *`,
     [
       id,
@@ -179,29 +158,33 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
       input.plan,
       input.amount,
       id,
-      slot,
+      null,
       input.block,
       input.paymentStatus,
       scheduledVisitDate,
-      firstVisit,
-      firstVisit ? toDateKey(now) : null,
+      null,
+      null,
+      input.paymentTiming,
     ]
   );
   return rows[0];
 }
 
-/** Direct signup-and-pay-now - unchanged behaviour, just routed through insertSignup. */
+/** Direct signup-and-pay-now: card via PayFast, activates when the payment completes. */
 export async function createSignup(
-  input: Omit<InsertSignupInput, "paymentStatus">
+  input: Omit<InsertSignupInput, "paymentStatus" | "paymentTiming">
 ): Promise<SignupRow> {
-  return insertSignup({ ...input, paymentStatus: "pending" });
+  return insertSignup({ ...input, paymentStatus: "pending", paymentTiming: "pay_now" });
 }
 
-/** Stage 1 of the book-then-pay flow - no PayFast interaction, just a service day reserved. */
+/**
+ * "Book now, pay after your first service": no PayFast interaction yet. The customer is 'booked' (awaiting
+ * payment) with no service day - the owner assigns one - and a payment link is sent once their first visit is done.
+ */
 export async function createBooking(
-  input: Omit<InsertSignupInput, "paymentStatus">
+  input: Omit<InsertSignupInput, "paymentStatus" | "paymentTiming">
 ): Promise<SignupRow> {
-  return insertSignup({ ...input, paymentStatus: "booked" });
+  return insertSignup({ ...input, paymentStatus: "booked", paymentTiming: "pay_after_service" });
 }
 
 export async function getSignup(id: string): Promise<SignupRow | null> {
@@ -1184,6 +1167,7 @@ export async function getUnwelcomedCustomers(): Promise<UnwelcomedCustomer[]> {
     `select id, full_name, house_number, whatsapp_number, plan, service_slot, scheduled_visit_date::text, tracking_token
      from signups
      where payment_status in ('active', 'booked') and welcomed_at is null
+       and not (${TO_BE_SCHEDULED_WHERE})
      order by created_at asc`
   );
   return rows.map((r) => ({
@@ -1203,6 +1187,112 @@ export async function markWelcomed(id: string): Promise<void> {
     "update signups set welcomed_at = now() where id = $1 and payment_status in ('active', 'booked')",
     [id]
   );
+}
+
+/**
+ * "To be scheduled": a monthly or annual customer who is paying or has booked (active or booked) and has been
+ * given no service day - no fixed slot and no next service date - so they are on no route and on no calendar until
+ * the owner assigns one. Derived from the data, so there is nothing to keep in step.
+ */
+const TO_BE_SCHEDULED_WHERE = `payment_status in ('active', 'booked') and plan in ('monthly', 'annual')
+  and service_slot is null and next_service_date is null`;
+
+export interface ToBeScheduledCustomer {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  block: number | null;
+  paymentStatus: "booked" | "active";
+  paymentTiming: "pay_now" | "pay_after_service";
+  welcomed: boolean;
+  trackingToken: string;
+  /** Whole days since they booked - the "waiting on me" clock. */
+  waitingDays: number;
+}
+
+/** Booked customers waiting on the owner for a service date, longest-waiting first. */
+export async function getToBeScheduled(): Promise<ToBeScheduledCustomer[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    block: number | null;
+    payment_status: "booked" | "active";
+    payment_timing: "pay_now" | "pay_after_service";
+    welcomed: boolean;
+    tracking_token: string;
+    waiting_days: number;
+  }>(
+    `select id, full_name, house_number, whatsapp_number, block, payment_status, payment_timing,
+            welcomed_at is not null as welcomed, tracking_token,
+            floor(extract(epoch from (now() - created_at)) / 86400)::int as waiting_days
+     from signups
+     where ${TO_BE_SCHEDULED_WHERE}
+     order by created_at asc`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    block: r.block,
+    paymentStatus: r.payment_status,
+    paymentTiming: r.payment_timing,
+    welcomed: r.welcomed,
+    trackingToken: r.tracking_token,
+    waitingDays: r.waiting_days,
+  }));
+}
+
+export interface PaymentLinkDue {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  whatsappNumber: string;
+  plan: PlanId;
+  /** The most recent recorded visit - the service the payment link follows. */
+  lastVisitDate: string;
+  paymentLinkSentAt: string | null;
+  paymentLinkExpired: boolean;
+}
+
+/**
+ * Customers who chose to pay after their first service, have had a visit recorded, and have not activated yet:
+ * the owner dashboard's "Send payment link" list. The flag is the data itself - it clears the moment the
+ * payment goes through (the customer stops being 'booked'), with nothing for anyone to tick off.
+ */
+export async function getPaymentLinksDue(): Promise<PaymentLinkDue[]> {
+  const { rows } = await getPool().query<{
+    id: string;
+    full_name: string;
+    house_number: string;
+    whatsapp_number: string;
+    plan: PlanId;
+    last_visit_date: string;
+    payment_link_sent_at: string | null;
+    expired: boolean;
+  }>(
+    `select s.id, s.full_name, s.house_number, s.whatsapp_number, s.plan, s.payment_link_sent_at,
+            (select max(v.service_date)::text from service_visits v where v.signup_id = s.id) as last_visit_date,
+            (s.payment_link_expires_at is not null and s.payment_link_expires_at < now()) as expired
+     from signups s
+     where s.payment_status = 'booked' and s.payment_timing = 'pay_after_service' and s.plan <> 'once-off'
+       and s.payment_method = 'payfast'
+       and exists (select 1 from service_visits v where v.signup_id = s.id)
+     order by last_visit_date asc, s.created_at asc`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    houseNumber: r.house_number,
+    whatsappNumber: r.whatsapp_number,
+    plan: r.plan,
+    lastVisitDate: r.last_visit_date,
+    paymentLinkSentAt: r.payment_link_sent_at,
+    paymentLinkExpired: r.expired,
+  }));
 }
 
 export interface BookedCustomer {
@@ -1334,6 +1424,8 @@ export interface ManualSignupInput {
   whatsappNumber: string;
   plan: PlanId;
   paymentMethod: "payfast" | "eft" | "cash";
+  /** Stated by the owner every time, never inferred: already paid, or still awaiting payment. */
+  paymentState: "paid" | "awaiting";
   block: number | null;
   serviceSlot: number | null;
   scheduledVisitDate: string | null;
@@ -1341,12 +1433,11 @@ export interface ManualSignupInput {
 }
 
 /**
- * "Add customer manually" on the owner page - creates the row exactly like a web signup
- * would (same slot/date defaulting when the owner leaves service day blank), except:
- * paymentMethod 'payfast' lands as 'booked' (the existing ops "Send payment link" flow
- * takes it from there), while 'eft'/'cash' land straight on 'active' - the owner is
- * vouching that this customer already pays outside PayFast, so there's no payment step
- * for the app to wait on.
+ * "Add customer manually" on the owner page. The owner says whether the customer has already paid:
+ * 'paid' lands as active with today as the start date, 'awaiting' lands as booked (awaiting payment) and is
+ * flagged "Send payment link" once a visit is recorded - but only for card customers, since a payment link is a
+ * card checkout. A subscriber is only given a service day if the owner types a slot; left blank they are "to be
+ * scheduled", the same as a web signup, so nobody is promised a date the owner has not chosen.
  */
 export async function createManualSignup(input: ManualSignupInput): Promise<SignupRow> {
   const id = randomUUID();
@@ -1354,23 +1445,21 @@ export async function createManualSignup(input: ManualSignupInput): Promise<Sign
   const subscriber = isSubscriberPlan(input.plan);
   const { workingDays } = await getAppSettings();
 
-  const serviceSlot = subscriber
-    ? input.serviceSlot ?? (await pickLeastLoadedSlot(eligibleSlotsForNewSignup(now, workingDays)))
-    : null;
+  const serviceSlot = subscriber ? input.serviceSlot : null;
   const scheduledVisitDate = !subscriber
     ? input.scheduledVisitDate ?? toDateKey(addWorkingDays(now, MIN_NOTICE_WORKING_DAYS, workingDays))
     : null;
 
-  const paymentStatus = input.paymentMethod === "payfast" ? "booked" : "active";
+  const paymentStatus = input.paymentState === "paid" ? "active" : "booked";
   const startDate = paymentStatus === "active" ? toDateKey(now) : null;
 
   const { rows } = await getPool().query<SignupRow>(
     `insert into signups (
        id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id,
        service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date,
-       payment_method, notes, start_date
+       payment_method, notes, start_date, payment_timing
      )
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12, $13, $14)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12, $13, $14, $15)
      returning *`,
     [
       id,
@@ -1387,6 +1476,7 @@ export async function createManualSignup(input: ManualSignupInput): Promise<Sign
       input.paymentMethod,
       input.notes,
       startDate,
+      input.paymentState === "awaiting" ? "pay_after_service" : "pay_now",
     ]
   );
   return rows[0];

@@ -61,6 +61,8 @@ export interface CustomerFormState {
   whatsappNumber: string;
   plan: PlanId;
   paymentMethod: PaymentMethod;
+  /** Add-customer only: stated every time, blank until chosen. */
+  paymentState: "" | "paid" | "awaiting";
   block: string;
   serviceSlot: string;
   scheduledVisitDate: string;
@@ -73,6 +75,7 @@ export const EMPTY_FORM: CustomerFormState = {
   whatsappNumber: "",
   plan: "monthly",
   paymentMethod: "payfast",
+  paymentState: "",
   block: "",
   serviceSlot: "",
   scheduledVisitDate: "",
@@ -122,6 +125,7 @@ export function formToPayload(form: CustomerFormState) {
     whatsappNumber: form.whatsappNumber.trim(),
     plan: form.plan,
     paymentMethod: form.paymentMethod,
+    ...(form.paymentState !== "" ? { paymentState: form.paymentState } : {}),
     block: form.block.trim() === "" ? null : Number(form.block),
     serviceSlot: form.plan !== "once-off" && form.serviceSlot.trim() !== "" ? Number(form.serviceSlot) : null,
     scheduledVisitDate: form.plan === "once-off" && form.scheduledVisitDate.trim() !== "" ? form.scheduledVisitDate : null,
@@ -136,6 +140,7 @@ export function customerToForm(c: CustomerRow): CustomerFormState {
     whatsappNumber: c.whatsappNumber,
     plan: c.plan,
     paymentMethod: c.paymentMethod,
+    paymentState: "",
     block: c.block === null ? "" : String(c.block),
     serviceSlot: c.serviceSlot === null ? "" : String(c.serviceSlot),
     scheduledVisitDate: c.scheduledVisitDate ?? "",
@@ -146,9 +151,12 @@ export function customerToForm(c: CustomerRow): CustomerFormState {
 export function CustomerFields({
   form,
   onChange,
+  askPaymentState = false,
 }: {
   form: CustomerFormState;
   onChange: (patch: Partial<CustomerFormState>) => void;
+  /** True on "Add customer": asks outright whether they have already paid. */
+  askPaymentState?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -204,6 +212,31 @@ export function CustomerFields({
           <option value="cash">Cash</option>
         </select>
       </div>
+      {askPaymentState && (
+        <fieldset className="rounded-xl border border-brand-200 px-3 py-2.5">
+          <legend className="px-1 text-xs font-semibold text-brand-600">Payment status (required)</legend>
+          <div className="flex flex-col gap-1.5 text-sm text-brand-900">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="paymentState"
+                checked={form.paymentState === "paid"}
+                onChange={() => onChange({ paymentState: "paid" })}
+              />
+              Already paid
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="paymentState"
+                checked={form.paymentState === "awaiting"}
+                onChange={() => onChange({ paymentState: "awaiting" })}
+              />
+              Awaiting payment
+            </label>
+          </div>
+        </fieldset>
+      )}
       {form.plan === "once-off" ? (
         <label className="text-xs text-brand-500">
           Visit date (optional - leave blank for 3 working days from now)
@@ -216,7 +249,7 @@ export function CustomerFields({
         </label>
       ) : (
         <label className="text-xs text-brand-500">
-          Service slot 1-14 (optional - leave blank to auto-assign)
+          Service slot 1-14 (optional - leave blank and schedule them from the dashboard)
           <input
             type="number"
             min={1}

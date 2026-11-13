@@ -6,10 +6,9 @@ import { signupSchema, normalizeCellNumber } from "@/lib/validation";
 export const runtime = "nodejs";
 
 /**
- * Stage 1 of the book-then-pay flow: name/house/WhatsApp/plan, no PayFast interaction.
- * Available for all three plans - insertSignup gives a once-off booking its tentative
- * visit date up front too, same as monthly/annual get their slot, so "given a service
- * day" holds regardless of which plan was picked.
+ * "Book now, pay after your first service": name/house/WhatsApp, no PayFast interaction. Monthly plan only - the
+ * customer is created as booked (awaiting payment) with no service day, which the owner assigns from the dashboard,
+ * and a payment link follows once their first visit is done.
  */
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -28,6 +27,12 @@ export async function POST(req: NextRequest) {
   }
 
   const { fullName, houseNumber, plan: planId } = parsed.data;
+  if (planId !== "monthly") {
+    return NextResponse.json(
+      { error: "Booking now and paying after your first service is only available on the Monthly plan." },
+      { status: 400 }
+    );
+  }
   const whatsappNumber = normalizeCellNumber(parsed.data.whatsappNumber);
 
   // Scoped to subscriptions, same as the pay-now route - a once-off booking (first-time

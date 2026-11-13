@@ -7,6 +7,7 @@ import ScheduleTab from "./ScheduleTab";
 import ReviewsTab from "./ReviewsTab";
 import SubscriptionsTab from "./SubscriptionsTab";
 import ServiceStatus from "./ServiceStatus";
+import { ToBeScheduledPanel, PaymentLinkPanel, type ToBeScheduledItem, type PaymentLinkItem } from "./BookingQueues";
 import CustomerProfile from "./CustomerProfile";
 import {
   CustomerFields,
@@ -84,6 +85,8 @@ interface DashboardData {
   skippedVisits: SkippedVisit[];
   overdueCount: number;
   bookedCount: number;
+  toBeScheduled: ToBeScheduledItem[];
+  paymentLinksDue: PaymentLinkItem[];
   bookedCustomers: BookedCustomer[];
 }
 
@@ -215,6 +218,10 @@ export default function OwnerPage() {
 
   async function handleCreate(e: FormEvent) {
     e.preventDefault();
+    if (addForm.paymentState === "") {
+      setAddError("Choose whether they have already paid or are awaiting payment.");
+      return;
+    }
     setAddSubmitting(true);
     setAddError(null);
     const res = await fetch("/api/owner/customers/create", {
@@ -369,6 +376,9 @@ export default function OwnerPage() {
 
       {tab === "dashboard" && data && (
         <>
+          <ToBeScheduledPanel items={data.toBeScheduled} onChanged={loadDashboard} onView={setViewingCustomerId} />
+          <PaymentLinkPanel items={data.paymentLinksDue} onChanged={loadDashboard} onView={setViewingCustomerId} />
+
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
               <p className="text-xs font-medium text-brand-500">Active subscribers</p>
@@ -605,7 +615,7 @@ export default function OwnerPage() {
 
           {showAddForm && (
             <form onSubmit={handleCreate} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
-              <CustomerFields form={addForm} onChange={(patch) => setAddForm((f) => ({ ...f, ...patch }))} />
+              <CustomerFields form={addForm} onChange={(patch) => setAddForm((f) => ({ ...f, ...patch }))} askPaymentState />
               {addError && <p className="mt-2 text-sm text-red-600">{addError}</p>}
               <button
                 type="submit"

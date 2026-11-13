@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { PAYFAST_CARD_STATEMENT, PAY_LATER_STATEMENT } from "./payment-copy";
+import { PAYFAST_CARD_STATEMENT } from "./payment-copy";
 
 /**
- * The official Payfast merchant badge, downloaded from the Payfast dashboard and saved here in public/.
+ * The official Payfast logo (full colour, from the Payfast logo pack), saved as public/payfast-badge.svg.
  * Until that file exists the badge simply does not render (no broken-image icon) - the wording stands alone.
  * If the downloaded file has a different name or type (e.g. .svg), change this one constant.
  */
-export const PAYFAST_BADGE_SRC = "/payfast-badge.png";
+export const PAYFAST_BADGE_SRC = "/payfast-badge.svg";
 
 function PayfastBadge() {
   const [missing, setMissing] = useState(false);
@@ -26,31 +26,25 @@ function PayfastBadge() {
       src={PAYFAST_BADGE_SRC}
       alt="Payfast"
       onError={() => setMissing(true)}
-      className="mb-3 h-8 w-auto"
+      className="mb-3 h-10 w-auto"
     />
   );
 }
 
 /**
- * Sits directly above the payment choice on the signup page, where someone hesitates. Two statements of equal
- * weight: what protects a card payment, and the way out for anyone who would rather not use a card. The card
- * claim is made for card payments only - cash and EFT are handled by OGP Services directly.
+ * Sits directly under the card option on the signup page, where someone hesitates. The claim is for card
+ * payments only - cash and EFT are handled by OGP Services directly, so nothing here may imply Payfast covers them.
  */
 export function PaymentTrustBlock() {
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <div className="border border-navy/15 px-4 py-4">
-        <PayfastBadge />
-        <p className="text-sm font-medium leading-relaxed text-navy">{PAYFAST_CARD_STATEMENT}</p>
-      </div>
-      <div className="border border-navy/15 px-4 py-4">
-        <p className="text-sm font-medium leading-relaxed text-navy">{PAY_LATER_STATEMENT}</p>
-      </div>
+    <div className="mt-4 border-t border-navy/10 pt-4">
+      <PayfastBadge />
+      <p className="text-sm font-medium leading-relaxed text-navy">{PAYFAST_CARD_STATEMENT}</p>
     </div>
   );
 }
 
-/** The card statement (and badge) on its own - for the booking confirmation, where the payment link is still to come. */
+/** The same statement (and badge) on the booking confirmation, where the payment link is still to come. */
 export function PaymentTrustNote() {
   return (
     <div className="mt-5 border-t border-navy/10 pt-5">

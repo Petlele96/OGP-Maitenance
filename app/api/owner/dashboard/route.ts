@@ -10,6 +10,8 @@ import {
   getUnwelcomedCustomers,
   getSkippedVisitsThisMonth,
   getBookedCustomers,
+  getToBeScheduled,
+  getPaymentLinksDue,
   getEffectiveNextServiceDate,
   getOverdueClients,
   getPendingReviewCount,
@@ -44,6 +46,8 @@ export async function GET(req: NextRequest) {
     bookedCustomers,
     overdueClients,
     pendingReviewCount,
+    toBeScheduled,
+    paymentLinksDue,
   ] = await Promise.all([
     getActiveCustomerCounts(),
     getOnceOffJobsThisMonth(),
@@ -56,6 +60,8 @@ export async function GET(req: NextRequest) {
     getBookedCustomers(),
     getOverdueClients(),
     getPendingReviewCount(),
+    getToBeScheduled(),
+    getPaymentLinksDue(),
   ]);
 
   const now = nowInJohannesburg();
@@ -106,5 +112,18 @@ export async function GET(req: NextRequest) {
     pendingReviewCount,
     bookedCount: bookedCustomers.length,
     bookedCustomers: booked,
+    toBeScheduled: toBeScheduled.map((c) => ({
+      id: c.id,
+      fullName: c.fullName,
+      houseNumber: c.houseNumber,
+      whatsappNumber: c.whatsappNumber,
+      block: c.block,
+      paid: c.paymentStatus === "active",
+      payAfterService: c.paymentTiming === "pay_after_service",
+      welcomed: c.welcomed,
+      trackingUrl: `${base}/track/${c.trackingToken}`,
+      waitingDays: c.waitingDays,
+    })),
+    paymentLinksDue,
   });
 }

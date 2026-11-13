@@ -43,10 +43,16 @@ export default function SignupPage() {
   const [submittingAction, setSubmittingAction] = useState<"pay" | "book" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [booked, setBooked] = useState(false);
+  // Monthly only: pay now by card (default), or book now and pay after the first service.
+  const [payTiming, setPayTiming] = useState<"now" | "after_service">("now");
   const formRef = useRef<HTMLFormElement>(null);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (plan === "monthly" && payTiming === "after_service") {
+      await handleBook();
+      return;
+    }
     setError(null);
     setSubmittingAction("pay");
 
@@ -288,9 +294,9 @@ export default function SignupPage() {
           <div className="border border-navy/15 px-6 py-8">
             <p className="text-lg font-semibold text-navy">You&apos;re booked!</p>
             <p className="mt-3 text-[15px] leading-relaxed text-navy/70">
-              Thanks, {fullName.trim().split(/\s+/)[0] || "there"}. We&apos;ve reserved your {planPhrase(plan)} and
-              given you a service day. We&apos;ll WhatsApp you a payment link on {whatsappNumber} to get started -
-              no need to do anything else for now.
+              Thanks, {fullName.trim().split(/\s+/)[0] || "there"}. We&apos;ve reserved your {planPhrase(plan)}.
+              We&apos;ll WhatsApp you on {whatsappNumber} with your service day, and send you a payment link once your
+              yard is done - no need to do anything else for now.
             </p>
             <PaymentTrustNote />
           </div>
@@ -439,7 +445,56 @@ export default function SignupPage() {
             </p>
           )}
 
-          <PaymentTrustBlock />
+          {plan === "monthly" ? (
+            <fieldset className="flex flex-col gap-4">
+              <legend className="mb-5 text-sm font-bold uppercase tracking-[0.12em] text-skyblue">How would you like to pay?</legend>
+
+              {/* Primary: the default, and the larger of the two. */}
+              <label
+                className={`block cursor-pointer border-2 px-5 py-5 transition ${
+                  payTiming === "now" ? "border-skyblue" : "border-navy/15"
+                }`}
+              >
+                <span className="flex items-start gap-3">
+                  <input
+                    type="radio"
+                    name="payTiming"
+                    value="now"
+                    checked={payTiming === "now"}
+                    onChange={() => setPayTiming("now")}
+                    className="mt-1 h-5 w-5 flex-shrink-0 accent-skyblue"
+                  />
+                  <span className="text-lg font-semibold leading-snug text-navy">
+                    Pay now and activate — R{PLANS.monthly.amount} a month, automatic.
+                  </span>
+                </span>
+                <PaymentTrustBlock />
+              </label>
+
+              {/* Secondary: smaller, below, clearly available. */}
+              <label
+                className={`flex cursor-pointer items-start gap-3 border px-4 py-3 transition ${
+                  payTiming === "after_service" ? "border-skyblue" : "border-navy/15"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="payTiming"
+                  value="after_service"
+                  checked={payTiming === "after_service"}
+                  onChange={() => setPayTiming("after_service")}
+                  className="mt-0.5 h-4 w-4 flex-shrink-0 accent-skyblue"
+                />
+                <span className="text-sm leading-relaxed text-navy/70">
+                  Book now, pay after your first service — we send you a payment link once your yard is done.
+                </span>
+              </label>
+            </fieldset>
+          ) : (
+            <div>
+              <PaymentTrustBlock />
+            </div>
+          )}
 
           <div>
             <button
@@ -447,28 +502,21 @@ export default function SignupPage() {
               disabled={submittingAction !== null || !agreedToTerms}
               className="h-14 w-full rounded-lg bg-cta text-base font-medium text-white transition hover:brightness-95 active:brightness-90 disabled:opacity-60"
             >
-              {submittingAction === "pay" ? "Redirecting to secure payment..." : "Continue to secure payment"}
+              {submittingAction === "pay"
+                ? "Redirecting to secure payment..."
+                : submittingAction === "book"
+                  ? "Booking..."
+                  : plan === "monthly" && payTiming === "after_service"
+                    ? "Book now — pay later"
+                    : "Continue to secure payment"}
             </button>
-            <p className="mt-4 text-xs leading-relaxed text-navy/50">
-              {PLANS[plan].recurring
-                ? "We'll take you to PayFast to set up your monthly payment. Cancel anytime."
-                : "We'll take you to PayFast to pay safely for your visit."}
-            </p>
-          </div>
-
-          <div>
-            <button
-              type="button"
-              onClick={handleBook}
-              disabled={submittingAction !== null || !agreedToTerms}
-              className="h-14 w-full rounded-lg border-2 border-navy text-base font-medium text-navy transition hover:bg-navy hover:text-white disabled:opacity-60"
-            >
-              {submittingAction === "book" ? "Booking..." : "Book now — pay later"}
-            </button>
-            <p className="mt-4 text-xs leading-relaxed text-navy/50">
-              We&apos;ll reserve your service day now and WhatsApp you a payment link to activate it - happy to pay
-              upfront instead? Use the button above.
-            </p>
+            {(plan !== "monthly" || payTiming === "now") && (
+              <p className="mt-4 text-xs leading-relaxed text-navy/50">
+                {PLANS[plan].recurring
+                  ? "We'll take you to PayFast to set up your monthly payment. Cancel anytime."
+                  : "We'll take you to PayFast to pay safely for your visit."}
+              </p>
+            )}
           </div>
         </form>
         )}

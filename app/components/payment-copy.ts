@@ -4,6 +4,5 @@
  * handled by OGP Services directly, so nothing here may imply Payfast covers them.
  */
 export const PAYFAST_CARD_STATEMENT =
-  "Card payments are processed by Payfast, a South African payment gateway. OGP Services never sees or stores your card details.";
-export const PAY_LATER_STATEMENT = "Prefer not to use a card? Choose book now, pay on your service day.";
+  "Card payments are processed by Payfast. OGP Services never sees or stores your card details.";
 export const PAYFAST_FOOTER_LINE = "Card payments processed securely by Payfast.";

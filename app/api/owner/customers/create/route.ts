@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
     whatsappNumber,
     plan: parsed.data.plan,
     paymentMethod: parsed.data.paymentMethod,
+    paymentState: parsed.data.paymentState,
     block: parsed.data.block ?? null,
     serviceSlot: parsed.data.serviceSlot ?? null,
     scheduledVisitDate: parsed.data.scheduledVisitDate ?? null,

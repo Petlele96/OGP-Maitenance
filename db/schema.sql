@@ -251,3 +251,11 @@ alter table signups add column if not exists next_service_date_manual boolean no
 -- (earlier days keep being rebuilt from the old fixed slot, so history is untouched).
 -- The day_confirmations table is no longer written or read. It is kept as it is so no data is lost.
 alter table signups add column if not exists routing_from date;
+
+-- How the customer chose to pay at booking: 'pay_now' (card, activates on payment) or 'pay_after_service' (booked, a
+-- payment link is sent once their first service is done). It is stored on the customer and drives what the owner dashboard
+-- asks for later. Every existing row defaults to 'pay_now' - customers already awaiting payment are marked
+-- pay_after_service once, by hand, when this is applied.
+alter table signups add column if not exists payment_timing text not null default 'pay_now';
+alter table signups drop constraint if exists signups_payment_timing_check;
+alter table signups add constraint signups_payment_timing_check check (payment_timing in ('pay_now', 'pay_after_service'));

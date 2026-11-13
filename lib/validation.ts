@@ -37,13 +37,15 @@ const DATE_KEY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Owner-page "Add customer manually". Service day is optional - a slot for subscriber
  * plans, a calendar date for once-off - left blank to auto-assign the same way a web
- * signup would. */
+ * signup would. The payment state is required. */
 export const manualSignupSchema = z.object({
   fullName: z.string().trim().min(2, "Enter a full name").max(120),
   houseNumber: z.string().trim().min(1, "Enter a house number").max(50),
   whatsappNumber: z.string().trim().regex(SA_MOBILE_REGEX, "Enter a valid South African cell number"),
   plan: z.enum(["monthly", "annual", "once-off"]),
   paymentMethod: z.enum(["payfast", "eft", "cash"]),
+  // Required, with no default: the owner must say whether they have already paid.
+  paymentState: z.enum(["paid", "awaiting"], { errorMap: () => ({ message: "Choose whether they have already paid or are awaiting payment" }) }),
   block: z.number().int().min(MIN_BLOCK).max(MAX_BLOCK).nullable().optional(),
   serviceSlot: z.number().int().min(1).max(14).nullable().optional(),
   scheduledVisitDate: z.string().regex(DATE_KEY_REGEX).nullable().optional(),
