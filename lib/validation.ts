@@ -23,6 +23,8 @@ export const signupSchema = z.object({
   }),
   // Not compulsory - some streets have no name, some tenants don't know theirs.
   block: z.number().int().min(MIN_BLOCK).max(MAX_BLOCK).nullable().optional(),
+  // Only read by /api/book: when a pay-after customer wants to pay. Defaults to their service day.
+  payAfterWhen: z.enum(["service_day", "month_end"]).optional(),
 });
 
 export type SignupInput = z.infer<typeof signupSchema>;
@@ -84,6 +86,7 @@ export const moveVisitSchema = z.object({
 /** JS Date.getDay() convention: 0=Sunday .. 6=Saturday. */
 export const updateSettingsSchema = z.object({
   dailyVisitLimit: z.number().int().min(1).max(100).optional(),
+  paydayDay: z.number().int().min(1).max(31).optional(),
   workingDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
 });
 

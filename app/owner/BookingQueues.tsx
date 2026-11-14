@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { buildDateChangedLink, buildWelcomeLink, buildWhatsAppChatLink } from "@/lib/site";
+import PaymentLinkActions from "./PaymentLinkActions";
 
 export interface ToBeScheduledItem {
   id: string;
@@ -16,15 +17,23 @@ export interface ToBeScheduledItem {
   waitingDays: number;
 }
 
-export interface PaymentLinkItem {
+export interface PaymentDueItem {
   id: string;
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
-  plan: "monthly" | "annual" | "once-off";
-  lastVisitDate: string;
+  amount: number;
+  dueDate: string;
+  status: "today" | "overdue";
+  daysOverdue: number;
+  lastServiceDate: string | null;
   paymentLinkSentAt: string | null;
-  paymentLinkExpired: boolean;
+}
+
+export interface PaymentsDueData {
+  dueToday: number;
+  overdue: number;
+  rows: PaymentDueItem[];
 }
 
 function todayKey(): string {
@@ -182,71 +191,53 @@ export function ToBeScheduledPanel({ items, onChanged, onView }: { items: ToBeSc
 }
 
 /**
- * Customers who chose to pay after their first service and have now had a visit recorded. The link issued is the
- * subscription-activation checkout (monthly billing), and the flag clears by itself when they pay.
+ * Pay-after customers whose payment is due today or overdue. Each row's button makes the activation link (the
+ * ordinary subscription checkout, unchanged) and copies a ready WhatsApp message with it in. The row clears by itself
+ * the moment the customer activates.
  */
-export function PaymentLinkPanel({ items, onChanged, onView }: { items: PaymentLinkItem[]; onChanged: () => void; onView: (id: string) => void }) {
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function send(c: PaymentLinkItem) {
-    setBusyId(c.id);
-    setError(null);
-    const waTab = window.open("", "_blank");
-    const res = await fetch("/api/owner/send-payment-link", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ signupId: c.id }),
-    });
-    setBusyId(null);
-    if (!res.ok) {
-      waTab?.close();
-      const json = await res.json().catch(() => ({}));
-      setError(json.error ?? "Couldn't create that link.");
-      return;
-    }
-    const data = await res.json();
-    if (waTab) waTab.location.href = data.whatsappLink;
-    recordContact(c.id);
-    onChanged();
-  }
-
+export function PaymentsDuePanel({ data, onChanged, onView }: { data: PaymentsDueData; onChanged: () => void; onView: (id: string) => void }) {
   return (
     <section className="flex flex-col gap-3">
-      <CountCard
-        count={items.length}
-        title="Send payment link"
-        waiting="Serviced customers who chose to pay after the work. The flag clears when they activate."
-        clear="No one is waiting for a payment link."
-      />
-      {items.length > 0 && (
+      <h2 className="text-sm font-semibold text-brand-900">Payments due</h2>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <CountCard
+          count={data.dueToday}
+          title="Due today"
+          waiting="Customers whose payment falls due today."
+          clear="No payments fall due today."
+        />
+        <CountCard
+          count={data.overdue}
+          title="Overdue"
+          waiting="Customers who were due before today and have not paid."
+          clear="Nothing is overdue."
+        />
+      </div>
+      {data.rows.length > 0 && (
         <ul className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
-          {items.map((c) => (
-            <li key={c.id} className="flex items-center justify-between gap-3 border-t border-brand-50 pt-3 first:border-0 first:pt-0">
-              <button onClick={() => onView(c.id)} className="min-w-0 text-left">
-                <p className="font-semibold text-brand-900 underline">{c.fullName}</p>
-                <p className="text-sm text-brand-700">House {c.houseNumber}</p>
-                <p className="text-xs text-brand-500">
-                  Serviced {shortDate(c.lastVisitDate)}
-                  {c.paymentLinkSentAt
-                    ? c.paymentLinkExpired
-                      ? " · link expired"
-                      : ` · link sent ${shortDate(c.paymentLinkSentAt.slice(0, 10))}`
-                    : " · link not sent yet"}
-                </p>
-              </button>
-              <button
-                onClick={() => send(c)}
-                disabled={busyId === c.id}
-                className="shrink-0 rounded-lg bg-brand-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              >
-                {busyId === c.id ? "Creating..." : c.paymentLinkSentAt ? "Send a new link" : "Send payment link"}
-              </button>
+          {data.rows.map((c) => (
+            <li key={c.id} className="border-t border-brand-50 pt-3 first:border-0 first:pt-0">
+              <div>
+                <button onClick={() => onView(c.id)} className="min-w-0 text-left">
+                  <p className="font-semibold text-brand-900 underline">{c.fullName}</p>
+                  <p className="text-sm text-brand-700">
+                    House {c.houseNumber} · R{c.amount}
+                  </p>
+                  <p className={`text-xs font-medium ${c.status === "overdue" ? "text-red-700" : "text-brand-700"}`}>
+                    Due {c.status === "today" ? "today" : shortDate(c.dueDate)}
+                    {c.status === "overdue" && ` · ${c.daysOverdue} day${c.daysOverdue === 1 ? "" : "s"} overdue`}
+                  </p>
+                  <p className="text-xs text-brand-500">
+                    {c.lastServiceDate ? `Last serviced ${shortDate(c.lastServiceDate)}` : "Not serviced yet"}
+                    {c.paymentLinkSentAt && ` · link last made ${shortDate(c.paymentLinkSentAt.slice(0, 10))}`}
+                  </p>
+                </button>
+              </div>
+              <PaymentLinkActions signupId={c.id} onSent={onChanged} />
             </li>
           ))}
         </ul>
       )}
-      {error && <p className="text-xs text-red-700">{error}</p>}
     </section>
   );
 }

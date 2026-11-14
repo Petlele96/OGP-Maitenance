@@ -259,3 +259,15 @@ alter table signups add column if not exists routing_from date;
 alter table signups add column if not exists payment_timing text not null default 'pay_now';
 alter table signups drop constraint if exists signups_payment_timing_check;
 alter table signups add constraint signups_payment_timing_check check (payment_timing in ('pay_now', 'pay_after_service'));
+
+-- The day of the month the owner's customers are paid. Every month-end due date (the first payday on or after the first
+-- service date) is worked out from it, so changing it once re-dates everyone still waiting. Days past the end of a short month fall on that month's last day.
+alter table app_settings add column if not exists payday_day integer not null default 25;
+alter table app_settings drop constraint if exists app_settings_payday_day_check;
+alter table app_settings add constraint app_settings_payday_day_check check (payday_day between 1 and 31);
+
+-- When a customer who chose to pay after their first service wants to pay: on their service day or at month-end.
+-- Null for everyone else - and for customers added by hand, who are treated as service day.
+alter table signups add column if not exists pay_after_when text;
+alter table signups drop constraint if exists signups_pay_after_when_check;
+alter table signups add constraint signups_pay_after_when_check check (pay_after_when in ('service_day', 'month_end'));

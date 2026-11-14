@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { PLANS, type PlanId, isSubscriberPlan } from "./plans";
 import { groupByBlock } from "./sort";
 import { nextDebitDate } from "./billing";
+import { paymentDueDate, dueStatus, daysBetween, type PayAfterWhen } from "./payments";
 import {
   toDateKey,
   visitDaysForSlotInMonth,
@@ -82,6 +83,7 @@ export interface SignupRow {
   payment_link_sent_at: string | null;
   payment_method: "payfast" | "eft" | "cash";
   payment_timing: "pay_now" | "pay_after_service";
+  pay_after_when: PayAfterWhen | null;
   notes: string | null;
   paused_at: string | null;
   tracking_token: string;
@@ -119,6 +121,8 @@ interface InsertSignupInput {
   block: number | null;
   paymentStatus: "pending" | "booked";
   paymentTiming: "pay_now" | "pay_after_service";
+  /** Only for pay-after bookings: pay on the service day, or at month-end. */
+  payAfterWhen: PayAfterWhen | null;
 }
 
 /**
@@ -147,8 +151,8 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls this after the zod schema has confirmed agreedToTerms === true.
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date, next_service_date, routing_from, payment_timing)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12::date, $13::date, $14)
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date, next_service_date, routing_from, payment_timing, pay_after_when)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12::date, $13::date, $14, $15)
      returning *`,
     [
       id,
@@ -165,6 +169,7 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
       null,
       null,
       input.paymentTiming,
+      input.payAfterWhen,
     ]
   );
   return rows[0];
@@ -172,9 +177,9 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
 
 /** Direct signup-and-pay-now: card via PayFast, activates when the payment completes. */
 export async function createSignup(
-  input: Omit<InsertSignupInput, "paymentStatus" | "paymentTiming">
+  input: Omit<InsertSignupInput, "paymentStatus" | "paymentTiming" | "payAfterWhen">
 ): Promise<SignupRow> {
-  return insertSignup({ ...input, paymentStatus: "pending", paymentTiming: "pay_now" });
+  return insertSignup({ ...input, paymentStatus: "pending", paymentTiming: "pay_now", payAfterWhen: null });
 }
 
 /**
@@ -860,25 +865,28 @@ async function getBlockedDateSet(): Promise<Set<string>> {
 export interface AppSettings {
   dailyVisitLimit: number;
   workingDays: number[];
+  /** Day of the month customers are paid - drives every month-end payment due date. */
+  paydayDay: number;
 }
 
 /** Singleton row, seeded by the schema migration - always exists. */
 export async function getAppSettings(): Promise<AppSettings> {
-  const { rows } = await getPool().query<{ daily_visit_limit: number; working_days: number[] }>(
-    "select daily_visit_limit, working_days from app_settings where id = true"
+  const { rows } = await getPool().query<{ daily_visit_limit: number; working_days: number[]; payday_day: number }>(
+    "select daily_visit_limit, working_days, payday_day from app_settings where id = true"
   );
-  return { dailyVisitLimit: rows[0].daily_visit_limit, workingDays: rows[0].working_days };
+  return { dailyVisitLimit: rows[0].daily_visit_limit, workingDays: rows[0].working_days, paydayDay: rows[0].payday_day };
 }
 
 export async function updateAppSettings(input: Partial<AppSettings>): Promise<AppSettings> {
   const current = await getAppSettings();
   const dailyVisitLimit = input.dailyVisitLimit ?? current.dailyVisitLimit;
   const workingDays = input.workingDays ?? current.workingDays;
+  const paydayDay = input.paydayDay ?? current.paydayDay;
   await getPool().query(
-    "update app_settings set daily_visit_limit = $1, working_days = $2 where id = true",
-    [dailyVisitLimit, workingDays]
+    "update app_settings set daily_visit_limit = $1, working_days = $2, payday_day = $3 where id = true",
+    [dailyVisitLimit, workingDays, paydayDay]
   );
-  return { dailyVisitLimit, workingDays };
+  return { dailyVisitLimit, workingDays, paydayDay };
 }
 
 /** For the ops Today list, to show an already-skipped row as skipped rather than actionable. */
@@ -1246,53 +1254,77 @@ export async function getToBeScheduled(): Promise<ToBeScheduledCustomer[]> {
   }));
 }
 
-export interface PaymentLinkDue {
+export interface PaymentDue {
   id: string;
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
   plan: PlanId;
-  /** The most recent recorded visit - the service the payment link follows. */
-  lastVisitDate: string;
+  amount: number;
+  dueDate: string;
+  status: "today" | "overdue";
+  daysOverdue: number;
+  /** The most recent recorded visit, or null if they have not been serviced yet. */
+  lastServiceDate: string | null;
   paymentLinkSentAt: string | null;
-  paymentLinkExpired: boolean;
 }
 
 /**
- * Customers who chose to pay after their first service, have had a visit recorded, and have not activated yet:
- * the owner dashboard's "Send payment link" list. The flag is the data itself - it clears the moment the
- * payment goes through (the customer stops being 'booked'), with nothing for anyone to tick off.
+ * Pay-after customers whose payment is due today or already overdue - the owner dashboard's "Payments due" list.
+ * Due date: their first service day (service-day customers, and anyone added by hand) or the first payday on or after
+ * it (month-end customers). Customers still waiting for a service day have no due date yet, and nobody is listed
+ * before their day. The list is the data itself: a customer drops off the moment they activate and stop
+ * being 'booked'. Service is never held back by any of this.
  */
-export async function getPaymentLinksDue(): Promise<PaymentLinkDue[]> {
+export async function getPaymentsDue(todayKey: string): Promise<PaymentDue[]> {
+  const { paydayDay } = await getAppSettings();
   const { rows } = await getPool().query<{
     id: string;
     full_name: string;
     house_number: string;
     whatsapp_number: string;
     plan: PlanId;
-    last_visit_date: string;
+    amount: string;
+    pay_after_when: PayAfterWhen | null;
+    next_service_date: string | null;
+    first_visit: string | null;
+    last_visit: string | null;
     payment_link_sent_at: string | null;
-    expired: boolean;
   }>(
-    `select s.id, s.full_name, s.house_number, s.whatsapp_number, s.plan, s.payment_link_sent_at,
-            (select max(v.service_date)::text from service_visits v where v.signup_id = s.id) as last_visit_date,
-            (s.payment_link_expires_at is not null and s.payment_link_expires_at < now()) as expired
+    `select s.id, s.full_name, s.house_number, s.whatsapp_number, s.plan, s.amount::text, s.pay_after_when,
+            s.next_service_date::text,
+            (select min(v.service_date)::text from service_visits v where v.signup_id = s.id) as first_visit,
+            (select max(v.service_date)::text from service_visits v where v.signup_id = s.id) as last_visit,
+            s.payment_link_sent_at
      from signups s
      where s.payment_status = 'booked' and s.payment_timing = 'pay_after_service' and s.plan <> 'once-off'
-       and s.payment_method = 'payfast'
-       and exists (select 1 from service_visits v where v.signup_id = s.id)
-     order by last_visit_date asc, s.created_at asc`
+       and s.payment_method = 'payfast'`
   );
-  return rows.map((r) => ({
-    id: r.id,
-    fullName: r.full_name,
-    houseNumber: r.house_number,
-    whatsappNumber: r.whatsapp_number,
-    plan: r.plan,
-    lastVisitDate: r.last_visit_date,
-    paymentLinkSentAt: r.payment_link_sent_at,
-    paymentLinkExpired: r.expired,
-  }));
+  const due: PaymentDue[] = [];
+  for (const r of rows) {
+    const dueDate = paymentDueDate({
+      when: r.pay_after_when,
+      payday: paydayDay,
+      firstServiceDate: r.first_visit ?? r.next_service_date,
+    });
+    if (!dueDate) continue;
+    const status = dueStatus(dueDate, todayKey);
+    if (status === "later") continue;
+    due.push({
+      id: r.id,
+      fullName: r.full_name,
+      houseNumber: r.house_number,
+      whatsappNumber: r.whatsapp_number,
+      plan: r.plan,
+      amount: Number(r.amount),
+      dueDate,
+      status,
+      daysOverdue: status === "overdue" ? daysBetween(dueDate, todayKey) : 0,
+      lastServiceDate: r.last_visit,
+      paymentLinkSentAt: r.payment_link_sent_at,
+    });
+  }
+  return due.sort((x, y) => (x.status === y.status ? x.dueDate.localeCompare(y.dueDate) : x.status === "overdue" ? -1 : 1));
 }
 
 export interface BookedCustomer {

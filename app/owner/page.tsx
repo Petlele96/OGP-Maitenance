@@ -7,7 +7,8 @@ import ScheduleTab from "./ScheduleTab";
 import ReviewsTab from "./ReviewsTab";
 import SubscriptionsTab from "./SubscriptionsTab";
 import ServiceStatus from "./ServiceStatus";
-import { ToBeScheduledPanel, PaymentLinkPanel, type ToBeScheduledItem, type PaymentLinkItem } from "./BookingQueues";
+import PaymentLinkActions from "./PaymentLinkActions";
+import { ToBeScheduledPanel, PaymentsDuePanel, type ToBeScheduledItem, type PaymentsDueData } from "./BookingQueues";
 import CustomerProfile from "./CustomerProfile";
 import {
   CustomerFields,
@@ -86,7 +87,7 @@ interface DashboardData {
   overdueCount: number;
   bookedCount: number;
   toBeScheduled: ToBeScheduledItem[];
-  paymentLinksDue: PaymentLinkItem[];
+  paymentsDue: PaymentsDueData;
   bookedCustomers: BookedCustomer[];
 }
 
@@ -377,7 +378,7 @@ export default function OwnerPage() {
       {tab === "dashboard" && data && (
         <>
           <ToBeScheduledPanel items={data.toBeScheduled} onChanged={loadDashboard} onView={setViewingCustomerId} />
-          <PaymentLinkPanel items={data.paymentLinksDue} onChanged={loadDashboard} onView={setViewingCustomerId} />
+          <PaymentsDuePanel data={data.paymentsDue} onChanged={loadDashboard} onView={setViewingCustomerId} />
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
@@ -507,7 +508,8 @@ export default function OwnerPage() {
             ) : (
               <ul className="mt-3 flex flex-col gap-3">
                 {data.bookedCustomers.map((c) => (
-                  <li key={c.id} className="flex items-center justify-between border-t border-brand-50 pt-3 first:border-0 first:pt-0">
+                  <li key={c.id} className="border-t border-brand-50 pt-3 first:border-0 first:pt-0">
+                    <div className="flex items-center justify-between">
                     <button onClick={() => setViewingCustomerId(c.id)} className="min-w-0 text-left">
                       <p className="font-semibold text-brand-900 underline">{c.fullName}</p>
                       <p className="text-sm text-brand-700">House {c.houseNumber}</p>
@@ -543,6 +545,8 @@ export default function OwnerPage() {
                         </>
                       )}
                     </div>
+                    </div>
+                    <PaymentLinkActions signupId={c.id} onSent={loadDashboard} heading="Send payment link now" />
                   </li>
                 ))}
               </ul>

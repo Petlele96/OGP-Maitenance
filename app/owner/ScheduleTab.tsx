@@ -6,6 +6,7 @@ import CalendarGrid from "./CalendarGrid";
 interface AppSettings {
   dailyVisitLimit: number;
   workingDays: number[];
+  paydayDay: number;
 }
 
 interface BlockedDate {
@@ -25,6 +26,10 @@ export default function ScheduleTab() {
   const [workingDaysInput, setWorkingDaysInput] = useState<number[]>([1, 2, 3, 4, 5]);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [paydayInput, setPaydayInput] = useState("25");
+  const [paydaySaving, setPaydaySaving] = useState(false);
+  const [paydaySaved, setPaydaySaved] = useState(false);
+  const [paydayError, setPaydayError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
   const [blockDateValue, setBlockDateValue] = useState("");
@@ -40,6 +45,7 @@ export default function ScheduleTab() {
     setBlockedDates(json.blockedDates);
     setLimitInput(String(json.settings.dailyVisitLimit));
     setWorkingDaysInput(json.settings.workingDays);
+    setPaydayInput(String(json.settings.paydayDay));
   }, []);
 
   useEffect(() => {
@@ -61,6 +67,28 @@ export default function ScheduleTab() {
     setSettingsSaving(false);
     setSettingsSaved(true);
     setRefreshToken((n) => n + 1);
+  }
+
+  async function handleSavePayday() {
+    const day = Number(paydayInput);
+    if (!Number.isInteger(day) || day < 1 || day > 31) {
+      setPaydayError("Enter a day between 1 and 31.");
+      return;
+    }
+    setPaydaySaving(true);
+    setPaydaySaved(false);
+    setPaydayError(null);
+    const res = await fetch("/api/owner/settings/update", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paydayDay: day }),
+    });
+    setPaydaySaving(false);
+    if (!res.ok) {
+      setPaydayError("Couldn't save that. Please try again.");
+      return;
+    }
+    setPaydaySaved(true);
   }
 
   async function handleBlockDate() {
@@ -128,6 +156,36 @@ export default function ScheduleTab() {
           className="mt-3 w-full rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
         >
           {settingsSaving ? "Saving..." : settingsSaved ? "Saved" : "Save"}
+        </button>
+      </section>
+
+      <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">
+        <h2 className="text-sm font-semibold text-brand-900">Payday date</h2>
+        <p className="mt-1 text-xs text-brand-500">
+          The day of the month your customers are paid. Every month-end payment due date follows it, so change it here
+          once if it turns out to be wrong.
+        </p>
+        <label className="mt-3 block text-xs text-brand-500">
+          Day of the month (1-31)
+          <input
+            type="number"
+            min={1}
+            max={31}
+            value={paydayInput}
+            onChange={(e) => {
+              setPaydayInput(e.target.value);
+              setPaydaySaved(false);
+            }}
+            className="mt-1 w-24 rounded-lg border border-brand-200 px-3 py-2 text-sm text-brand-900"
+          />
+        </label>
+        {paydayError && <p className="mt-2 text-xs text-red-600">{paydayError}</p>}
+        <button
+          onClick={handleSavePayday}
+          disabled={paydaySaving || !settings}
+          className="mt-3 w-full rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+        >
+          {paydaySaving ? "Saving..." : paydaySaved ? "Saved" : "Save"}
         </button>
       </section>
 

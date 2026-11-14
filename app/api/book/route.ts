@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
     plan: planId,
     amount: plan.amount,
     block: parsed.data.block ?? null,
+    payAfterWhen: parsed.data.payAfterWhen ?? "service_day",
   });
 
   return NextResponse.json({ id: booking.id });

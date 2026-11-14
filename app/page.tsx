@@ -45,6 +45,8 @@ export default function SignupPage() {
   const [booked, setBooked] = useState(false);
   // Monthly only: pay now by card (default), or book now and pay after the first service.
   const [payTiming, setPayTiming] = useState<"now" | "after_service">("now");
+  // Pay-after only: pay on the service day (default), or at month-end when the customer is paid.
+  const [payAfterWhen, setPayAfterWhen] = useState<"service_day" | "month_end">("service_day");
   const formRef = useRef<HTMLFormElement>(null);
 
   async function handleSubmit(e: FormEvent) {
@@ -110,6 +112,7 @@ export default function SignupPage() {
           plan,
           agreedToTerms,
           block: block === "" ? null : Number(block),
+          payAfterWhen,
         }),
       });
       const data = await res.json();
@@ -295,8 +298,9 @@ export default function SignupPage() {
             <p className="text-lg font-semibold text-navy">You&apos;re booked!</p>
             <p className="mt-3 text-[15px] leading-relaxed text-navy/70">
               Thanks, {fullName.trim().split(/\s+/)[0] || "there"}. We&apos;ve reserved your {planPhrase(plan)}.
-              We&apos;ll WhatsApp you on {whatsappNumber} with your service day, and send you a payment link once your
-              yard is done - no need to do anything else for now.
+              We&apos;ll WhatsApp you on {whatsappNumber} with your service day, and send you a payment link{" "}
+              {payAfterWhen === "month_end" ? "at month-end" : "once your yard is done"} - no need to do anything else
+              for now.
             </p>
             <PaymentTrustNote />
           </div>
@@ -486,9 +490,37 @@ export default function SignupPage() {
                   className="mt-0.5 h-4 w-4 flex-shrink-0 accent-skyblue"
                 />
                 <span className="text-sm leading-relaxed text-navy/70">
-                  Book now, pay after your first service — we send you a payment link once your yard is done.
+                  Book now, pay after your first service — we send you a payment link.
                 </span>
               </label>
+
+              {/* When to pay: only asked of someone who has chosen to pay after. Service goes ahead either way. */}
+              {payTiming === "after_service" && (
+                <div role="radiogroup" aria-label="When would you like to pay?" className="ml-7 flex flex-col gap-2 text-sm text-navy">
+                  <label className="flex cursor-pointer items-center gap-3">
+                    <input
+                      type="radio"
+                      name="payAfterWhen"
+                      value="service_day"
+                      checked={payAfterWhen === "service_day"}
+                      onChange={() => setPayAfterWhen("service_day")}
+                      className="h-4 w-4 flex-shrink-0 accent-skyblue"
+                    />
+                    On my service day
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-3">
+                    <input
+                      type="radio"
+                      name="payAfterWhen"
+                      value="month_end"
+                      checked={payAfterWhen === "month_end"}
+                      onChange={() => setPayAfterWhen("month_end")}
+                      className="h-4 w-4 flex-shrink-0 accent-skyblue"
+                    />
+                    At month-end, when I get paid
+                  </label>
+                </div>
+              )}
             </fieldset>
           ) : (
             <div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { buildWhatsAppChatLink, buildDateChangedLink } from "@/lib/site";
+import PaymentLinkActions from "./PaymentLinkActions";
 import { AWAITING_PAYMENT_FLAG_DAYS, type SkipOrMoveReason } from "@/lib/schedule";
 import {
   CustomerFields,
@@ -307,6 +308,16 @@ export default function CustomerProfile({
                 )}
               </div>
               {actionError && <p className="mt-2 text-sm text-red-600">{actionError}</p>}
+
+              {data.customer.paymentStatus === "booked" && (
+                <div className="mt-4 rounded-xl bg-brand-50 p-3">
+                  <PaymentLinkActions signupId={id} onSent={() => { onChanged(); load(); }} heading="Send payment link now" />
+                  <p className="mt-2 text-xs text-brand-500">
+                    Works at any time. It does not change their due date - if they do not pay, they still show in Payments
+                    due on the day.
+                  </p>
+                </div>
+              )}
 
               {editing && (
                 <form onSubmit={handleSave} className="mt-4 border-t border-brand-50 pt-4">

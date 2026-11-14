@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/owner-auth";
 import { generatePaymentLink } from "@/lib/db";
-import { buildPaymentLinkLink } from "@/lib/site";
+import { buildPaymentLinkLink, buildPaymentLinkMessage } from "@/lib/site";
 
 export const runtime = "nodejs";
 
@@ -37,6 +37,8 @@ export async function POST(req: NextRequest) {
   const payUrl = `${siteUrl(req)}/pay/${link.token}`;
   return NextResponse.json({
     whatsappLink: buildPaymentLinkLink(link.fullName, link.whatsappNumber, link.plan, payUrl),
+    // The same message as plain text, for the dashboard's copy button.
+    message: buildPaymentLinkMessage(link.fullName, link.plan, payUrl),
     expiresAt: link.expiresAt,
   });
 }
