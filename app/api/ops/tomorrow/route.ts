@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/ops-auth";
 import { toDateKey, nowInJohannesburg } from "@/lib/schedule";
 import { getVisitsGroupedByDate } from "@/lib/db";
-import { groupByBlock } from "@/lib/sort";
+import { groupByPhase } from "@/lib/sort";
 
 export const runtime = "nodejs";
 
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     fullName: s.full_name,
     houseNumber: s.house_number,
     whatsappNumber: s.whatsapp_number,
-    block: s.block,
+    phase: s.phase,
     plan: s.plan,
     notes: s.notes,
   }));
@@ -35,6 +35,6 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     date: dateKey,
     total: customers.length,
-    groups: groupByBlock(customers),
+    groups: groupByPhase(customers),
   });
 }

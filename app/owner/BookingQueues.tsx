@@ -9,7 +9,7 @@ export interface ToBeScheduledItem {
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
-  block: number | null;
+  phase: number | null;
   paid: boolean;
   payAfterService: boolean;
   welcomed: boolean;
@@ -140,7 +140,7 @@ export function ToBeScheduledPanel({ items, onChanged, onView }: { items: ToBeSc
               </button>
               <p className="text-sm text-brand-700">
                 House {c.houseNumber}
-                {c.block !== null && <> · Block {c.block}</>} ·{" "}
+                {c.phase !== null && <> · Phase {c.phase}</>} ·{" "}
                 <a
                   href={buildWhatsAppChatLink(c.whatsappNumber)}
                   target="_blank"

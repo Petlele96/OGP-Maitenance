@@ -219,6 +219,10 @@ export default function OwnerPage() {
 
   async function handleCreate(e: FormEvent) {
     e.preventDefault();
+    if (addForm.phase === "") {
+      setAddError("Choose the customer's phase.");
+      return;
+    }
     if (addForm.paymentState === "") {
       setAddError("Choose whether they have already paid or are awaiting payment.");
       return;

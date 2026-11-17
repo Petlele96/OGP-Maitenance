@@ -43,9 +43,10 @@ alter table signups add column if not exists last_payment_failed_at timestamptz;
 alter table signups add column if not exists terms_accepted_at timestamptz;
 -- Launch offer promotion has ended - no signups ever qualified.
 alter table signups drop column if exists launch_offer_eligible;
--- Optional, not compulsory - some streets have no name and some tenants don't know theirs.
--- Values 1-6 (validated in application code, not a DB check, to keep this migration idempotent).
-alter table signups add column if not exists block integer;
+-- Platinum Village is laid out in phases (1 to 5). This column used to be called block - scripts/migrate.mjs renames
+-- an existing block column to phase before running this file, so the column and its data carry over. Nullable because
+-- customers from before phases were required may not have one yet.
+alter table signups add column if not exists phase integer;
 
 create table if not exists payments (
   id uuid primary key default gen_random_uuid(),
@@ -60,7 +61,7 @@ create index if not exists payments_received_at_idx on payments (received_at);
 
 -- 'once-off' joins 'monthly'/'annual' as a third plan value. ADD CONSTRAINT isn't
 -- idempotently re-runnable by this naive semicolon-splitting migration script, so -
--- matching service_slot/block above - the enum is validated in Zod instead of a DB check.
+-- matching service_slot/phase above - the enum is validated in Zod instead of a DB check.
 alter table signups drop constraint if exists signups_plan_check;
 
 -- Once-off bookings only: the single date they're booked for. Null for subscribers.
@@ -271,3 +272,7 @@ alter table app_settings add constraint app_settings_payday_day_check check (pay
 alter table signups add column if not exists pay_after_when text;
 alter table signups drop constraint if exists signups_pay_after_when_check;
 alter table signups add constraint signups_pay_after_when_check check (pay_after_when in ('service_day', 'month_end'));
+
+-- Exactly Phase 1 to 5 (null allowed for customers who have no phase set yet).
+alter table signups drop constraint if exists signups_phase_check;
+alter table signups add constraint signups_phase_check check (phase between 1 and 5);

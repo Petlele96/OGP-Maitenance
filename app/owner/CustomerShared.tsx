@@ -1,6 +1,6 @@
 import type { PlanId } from "@/lib/plans";
 import type { SkipOrMoveReason } from "@/lib/schedule";
-import { MIN_BLOCK, MAX_BLOCK } from "@/lib/sort";
+import { PHASES } from "@/lib/sort";
 
 export type PaymentMethod = "payfast" | "eft" | "cash";
 export type PaymentStatus = "booked" | "pending" | "active" | "failed" | "cancelled" | "archived";
@@ -13,7 +13,7 @@ export interface CustomerRow {
   plan: PlanId;
   paymentStatus: PaymentStatus;
   paymentMethod: PaymentMethod;
-  block: number | null;
+  phase: number | null;
   serviceSlot: number | null;
   scheduledVisitDate: string | null;
   notes: string | null;
@@ -63,7 +63,7 @@ export interface CustomerFormState {
   paymentMethod: PaymentMethod;
   /** Add-customer only: stated every time, blank until chosen. */
   paymentState: "" | "paid" | "awaiting";
-  block: string;
+  phase: string;
   serviceSlot: string;
   scheduledVisitDate: string;
   notes: string;
@@ -76,7 +76,7 @@ export const EMPTY_FORM: CustomerFormState = {
   plan: "monthly",
   paymentMethod: "payfast",
   paymentState: "",
-  block: "",
+  phase: "",
   serviceSlot: "",
   scheduledVisitDate: "",
   notes: "",
@@ -126,7 +126,7 @@ export function formToPayload(form: CustomerFormState) {
     plan: form.plan,
     paymentMethod: form.paymentMethod,
     ...(form.paymentState !== "" ? { paymentState: form.paymentState } : {}),
-    block: form.block.trim() === "" ? null : Number(form.block),
+    phase: form.phase.trim() === "" ? null : Number(form.phase),
     serviceSlot: form.plan !== "once-off" && form.serviceSlot.trim() !== "" ? Number(form.serviceSlot) : null,
     scheduledVisitDate: form.plan === "once-off" && form.scheduledVisitDate.trim() !== "" ? form.scheduledVisitDate : null,
     notes: form.notes.trim() === "" ? null : form.notes.trim(),
@@ -141,7 +141,7 @@ export function customerToForm(c: CustomerRow): CustomerFormState {
     plan: c.plan,
     paymentMethod: c.paymentMethod,
     paymentState: "",
-    block: c.block === null ? "" : String(c.block),
+    phase: c.phase === null ? "" : String(c.phase),
     serviceSlot: c.serviceSlot === null ? "" : String(c.serviceSlot),
     scheduledVisitDate: c.scheduledVisitDate ?? "",
     notes: c.notes ?? "",
@@ -174,14 +174,17 @@ export function CustomerFields({
           className="flex-1 rounded-xl border border-brand-200 px-3 py-2.5 text-sm text-brand-900 outline-none focus:border-brand-500"
         />
         <select
-          value={form.block}
-          onChange={(e) => onChange({ block: e.target.value })}
+          value={form.phase}
+          onChange={(e) => onChange({ phase: e.target.value })}
           className="rounded-xl border border-brand-200 px-3 py-2.5 text-sm text-brand-900"
         >
-          <option value="">No block</option>
-          {Array.from({ length: MAX_BLOCK - MIN_BLOCK + 1 }, (_, i) => MIN_BLOCK + i).map((b) => (
-            <option key={b} value={b}>
-              Block {b}
+          {/* Adding a customer: a phase must be chosen. Editing: a customer with no phase yet can stay without one. */}
+          <option value="" disabled={askPaymentState}>
+            {askPaymentState ? "Select phase" : "No phase set"}
+          </option>
+          {PHASES.map((p) => (
+            <option key={p} value={p}>
+              Phase {p}
             </option>
           ))}
         </select>

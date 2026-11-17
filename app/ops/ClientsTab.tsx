@@ -12,7 +12,7 @@ interface OpsClient {
   id: string;
   fullName: string;
   houseNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
   paused: boolean;
   lastVisitDate: string | null;
@@ -50,8 +50,8 @@ function planLabel(plan: PlanId): string {
   return plan === "monthly" ? "Monthly" : plan === "annual" ? "Annual" : "Once-off";
 }
 
-function blockLabel(block: number | null): string {
-  return block === null ? "No block" : `Block ${block}`;
+function phaseLabel(phase: number | null): string {
+  return phase === null ? "No phase" : `Phase ${phase}`;
 }
 
 async function postJson(url: string, body: unknown): Promise<Response> {
@@ -63,7 +63,7 @@ export default function ClientsTab({
   onChanged,
   onUnauthorized,
 }: {
-  /** "overdue" lists only clients past their next service date, in walking order (block, then house). */
+  /** "overdue" lists only clients past their next service date, in walking order (phase, then house). */
   mode: "all" | "overdue";
   onChanged: () => void;
   onUnauthorized: () => void;
@@ -99,7 +99,7 @@ export default function ClientsTab({
         .filter((c) => c.overdueSince !== null)
         .sort(
           (a, b) =>
-            (a.block ?? Infinity) - (b.block ?? Infinity) ||
+            (a.phase ?? Infinity) - (b.phase ?? Infinity) ||
             a.houseNumber.localeCompare(b.houseNumber, undefined, { numeric: true })
         );
     }
@@ -126,7 +126,7 @@ export default function ClientsTab({
         <WorkersCard workers={workers} onChanged={loadWorkers} onUnauthorized={onUnauthorized} />
       ) : (
         <p className="text-sm text-brand-600">
-          Clients past their next service date, by block. Open one and record the visit with the date the work was
+          Clients past their next service date, by phase. Open one and record the visit with the date the work was
           done.
         </p>
       )}
@@ -161,7 +161,7 @@ export default function ClientsTab({
                   )}
                 </p>
                 <p className="text-sm text-brand-700">
-                  House {c.houseNumber} <span className="text-brand-400">· {blockLabel(c.block)}</span>
+                  House {c.houseNumber} <span className="text-brand-400">· {phaseLabel(c.phase)}</span>
                 </p>
                 <p className="mt-2 text-xs text-brand-600">
                   Last visit:{" "}
@@ -396,7 +396,7 @@ function ClientPage({
       <div>
         <h2 className="text-xl font-bold text-brand-900">{client.fullName}</h2>
         <p className="text-sm text-brand-700">
-          House {client.houseNumber} · {blockLabel(client.block)} · {planLabel(client.plan)}
+          House {client.houseNumber} · {phaseLabel(client.phase)} · {planLabel(client.plan)}
           {client.paused ? " · Paused" : ""}
         </p>
       </div>

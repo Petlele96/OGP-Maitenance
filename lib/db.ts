@@ -1,7 +1,7 @@
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { PLANS, type PlanId, isSubscriberPlan } from "./plans";
-import { groupByBlock } from "./sort";
+import { groupByPhase } from "./sort";
 import { nextDebitDate } from "./billing";
 import { paymentDueDate, dueStatus, daysBetween, type PayAfterWhen } from "./payments";
 import {
@@ -75,7 +75,7 @@ export interface SignupRow {
   cancelled_at: string | null;
   last_payment_failed_at: string | null;
   terms_accepted_at: string;
-  block: number | null;
+  phase: number | null;
   scheduled_visit_date: string | null;
   welcomed_at: string | null;
   payment_link_token: string | null;
@@ -118,7 +118,7 @@ interface InsertSignupInput {
   whatsappNumber: string;
   plan: PlanId;
   amount: number;
-  block: number | null;
+  phase: number | null;
   paymentStatus: "pending" | "booked";
   paymentTiming: "pay_now" | "pay_after_service";
   /** Only for pay-after bookings: pay on the service day, or at month-end. */
@@ -151,7 +151,7 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
   // terms_accepted_at is set unconditionally here, not passed in - the API route only
   // ever calls this after the zod schema has confirmed agreedToTerms === true.
   const { rows } = await getPool().query<SignupRow>(
-    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date, next_service_date, routing_from, payment_timing, pay_after_when)
+    `insert into signups (id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id, service_slot, terms_accepted_at, phase, payment_status, scheduled_visit_date, next_service_date, routing_from, payment_timing, pay_after_when)
      values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12::date, $13::date, $14, $15)
      returning *`,
     [
@@ -163,7 +163,7 @@ async function insertSignup(input: InsertSignupInput): Promise<SignupRow> {
       input.amount,
       id,
       null,
-      input.block,
+      input.phase,
       input.paymentStatus,
       scheduledVisitDate,
       null,
@@ -414,7 +414,7 @@ export interface DayYard {
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
   notes: string | null;
   /** 'pending' = nothing recorded yet - treated as "assume done" until the day is confirmed. */
@@ -433,7 +433,7 @@ interface RoutePoolRow {
   full_name: string;
   house_number: string;
   whatsapp_number: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
   notes: string | null;
   payment_status: SignupRow["payment_status"];
@@ -502,7 +502,7 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
   const todayKey = toDateKey(nowInJohannesburg());
   const [{ rows: signups }, { rows: skips }, { rows: visits }, ctx, drivenSkips] = await Promise.all([
     pool.query<RoutePoolRow>(
-      `select id, full_name, house_number, whatsapp_number, block, plan, notes, payment_status,
+      `select id, full_name, house_number, whatsapp_number, phase, plan, notes, payment_status,
               service_slot, scheduled_visit_date::text,
               next_service_date::text, routing_from::text,
               (created_at at time zone 'Africa/Johannesburg')::date::text as created_date,
@@ -573,7 +573,7 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
         fullName: s.full_name,
         houseNumber: s.house_number,
         whatsappNumber: s.whatsapp_number,
-        block: s.block,
+        phase: s.phase,
         plan: s.plan,
         notes: s.notes,
         status: visit ? "done" : skip ? "not_done" : "pending",
@@ -590,12 +590,12 @@ export async function getRoutesForDates(dates: string[]): Promise<Map<string, Da
 
 /**
  * One day's route as a single list in service order: overdue yards first (marked), then the rest - each part
- * by block, then house number, so the crew walks the estate in order rather than zigzagging by date.
+ * by phase, then house number, so the crew walks the estate in order rather than zigzagging by date.
  */
 export async function getDayRoute(dateKey: string): Promise<{ yards: DayYard[] }> {
   const routes = await getRoutesForDates([dateKey]);
   const all = routes.get(dateKey) ?? [];
-  const inOrder = (list: DayYard[]) => groupByBlock(list).flatMap((g) => g.customers);
+  const inOrder = (list: DayYard[]) => groupByPhase(list).flatMap((g) => g.customers);
   const yards = [...inOrder(all.filter((y) => y.overdueSince !== null)), ...inOrder(all.filter((y) => y.overdueSince === null))];
   return { yards };
 }
@@ -1210,7 +1210,7 @@ export interface ToBeScheduledCustomer {
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
-  block: number | null;
+  phase: number | null;
   paymentStatus: "booked" | "active";
   paymentTiming: "pay_now" | "pay_after_service";
   welcomed: boolean;
@@ -1226,14 +1226,14 @@ export async function getToBeScheduled(): Promise<ToBeScheduledCustomer[]> {
     full_name: string;
     house_number: string;
     whatsapp_number: string;
-    block: number | null;
+    phase: number | null;
     payment_status: "booked" | "active";
     payment_timing: "pay_now" | "pay_after_service";
     welcomed: boolean;
     tracking_token: string;
     waiting_days: number;
   }>(
-    `select id, full_name, house_number, whatsapp_number, block, payment_status, payment_timing,
+    `select id, full_name, house_number, whatsapp_number, phase, payment_status, payment_timing,
             welcomed_at is not null as welcomed, tracking_token,
             floor(extract(epoch from (now() - created_at)) / 86400)::int as waiting_days
      from signups
@@ -1245,7 +1245,7 @@ export async function getToBeScheduled(): Promise<ToBeScheduledCustomer[]> {
     fullName: r.full_name,
     houseNumber: r.house_number,
     whatsappNumber: r.whatsapp_number,
-    block: r.block,
+    phase: r.phase,
     paymentStatus: r.payment_status,
     paymentTiming: r.payment_timing,
     welcomed: r.welcomed,
@@ -1333,7 +1333,7 @@ export interface BookedCustomer {
   houseNumber: string;
   whatsappNumber: string;
   plan: PlanId;
-  block: number | null;
+  phase: number | null;
   serviceSlot: number | null;
   scheduledVisitDate: string | null;
   paymentLinkSentAt: string | null;
@@ -1357,7 +1357,7 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     house_number: string;
     whatsapp_number: string;
     plan: PlanId;
-    block: number | null;
+    phase: number | null;
     service_slot: number | null;
     scheduled_visit_date: string | null;
     payment_link_sent_at: string | null;
@@ -1365,7 +1365,7 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     notes: string | null;
     awaiting_days: number;
   }>(
-    `select id, full_name, house_number, whatsapp_number, plan, block, service_slot,
+    `select id, full_name, house_number, whatsapp_number, plan, phase, service_slot,
             scheduled_visit_date::text, payment_link_sent_at, payment_link_expires_at::text, notes,
             floor(extract(epoch from (now() - created_at)) / 86400)::int as awaiting_days
      from signups
@@ -1378,7 +1378,7 @@ export async function getBookedCustomers(): Promise<BookedCustomer[]> {
     houseNumber: r.house_number,
     whatsappNumber: r.whatsapp_number,
     plan: r.plan,
-    block: r.block,
+    phase: r.phase,
     serviceSlot: r.service_slot,
     scheduledVisitDate: r.scheduled_visit_date,
     paymentLinkSentAt: r.payment_link_sent_at,
@@ -1396,7 +1396,7 @@ export interface CustomerRow {
   plan: PlanId;
   paymentStatus: SignupRow["payment_status"];
   paymentMethod: SignupRow["payment_method"];
-  block: number | null;
+  phase: number | null;
   serviceSlot: number | null;
   scheduledVisitDate: string | null;
   notes: string | null;
@@ -1418,7 +1418,7 @@ export async function getAllCustomers(): Promise<CustomerRow[]> {
     plan: PlanId;
     payment_status: SignupRow["payment_status"];
     payment_method: SignupRow["payment_method"];
-    block: number | null;
+    phase: number | null;
     service_slot: number | null;
     scheduled_visit_date: string | null;
     notes: string | null;
@@ -1426,7 +1426,7 @@ export async function getAllCustomers(): Promise<CustomerRow[]> {
     awaiting_days: number | null;
   }>(
     `select id, full_name, house_number, whatsapp_number, plan, payment_status, payment_method,
-            block, service_slot, scheduled_visit_date::text, notes, paused_at,
+            phase, service_slot, scheduled_visit_date::text, notes, paused_at,
             case when payment_status = 'booked' then floor(extract(epoch from (now() - created_at)) / 86400)::int end as awaiting_days
      from signups
      order by created_at desc`
@@ -1440,7 +1440,7 @@ export async function getAllCustomers(): Promise<CustomerRow[]> {
     plan: r.plan,
     paymentStatus: r.payment_status,
     paymentMethod: r.payment_method,
-    block: r.block,
+    phase: r.phase,
     serviceSlot: r.service_slot,
     scheduledVisitDate: r.scheduled_visit_date,
     notes: r.notes,
@@ -1458,7 +1458,7 @@ export interface ManualSignupInput {
   paymentMethod: "payfast" | "eft" | "cash";
   /** Stated by the owner every time, never inferred: already paid, or still awaiting payment. */
   paymentState: "paid" | "awaiting";
-  block: number | null;
+  phase: number | null;
   serviceSlot: number | null;
   scheduledVisitDate: string | null;
   notes: string | null;
@@ -1488,7 +1488,7 @@ export async function createManualSignup(input: ManualSignupInput): Promise<Sign
   const { rows } = await getPool().query<SignupRow>(
     `insert into signups (
        id, full_name, house_number, whatsapp_number, plan, amount, payfast_m_payment_id,
-       service_slot, terms_accepted_at, block, payment_status, scheduled_visit_date,
+       service_slot, terms_accepted_at, phase, payment_status, scheduled_visit_date,
        payment_method, notes, start_date, payment_timing
      )
      values ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12, $13, $14, $15)
@@ -1502,7 +1502,7 @@ export async function createManualSignup(input: ManualSignupInput): Promise<Sign
       PLANS[input.plan].amount,
       id,
       serviceSlot,
-      input.block,
+      input.phase,
       paymentStatus,
       scheduledVisitDate,
       input.paymentMethod,
@@ -1521,7 +1521,7 @@ export interface UpdateSignupInput {
   whatsappNumber: string;
   plan: PlanId;
   paymentMethod: "payfast" | "eft" | "cash";
-  block: number | null;
+  phase: number | null;
   serviceSlot: number | null;
   scheduledVisitDate: string | null;
   notes: string | null;
@@ -1534,7 +1534,7 @@ export async function updateSignup(input: UpdateSignupInput): Promise<SignupRow 
   const { rows } = await getPool().query<SignupRow>(
     `update signups set
        full_name = $2, house_number = $3, whatsapp_number = $4, plan = $5, amount = $6,
-       payment_method = $7, block = $8, service_slot = $9, scheduled_visit_date = $10,
+       payment_method = $7, phase = $8, service_slot = $9, scheduled_visit_date = $10,
        notes = $11, updated_at = now()
      where id = $1
      returning *`,
@@ -1546,7 +1546,7 @@ export async function updateSignup(input: UpdateSignupInput): Promise<SignupRow 
       input.plan,
       PLANS[input.plan].amount,
       input.paymentMethod,
-      input.block,
+      input.phase,
       input.serviceSlot,
       input.scheduledVisitDate,
       input.notes,
@@ -1757,7 +1757,7 @@ export interface CalendarPerson {
   id: string;
   fullName: string;
   houseNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
 }
 
@@ -1799,13 +1799,13 @@ export async function getServiceCalendar(year: number, month1: number): Promise<
       id: string;
       full_name: string;
       house_number: string;
-      block: number | null;
+      phase: number | null;
       plan: PlanId;
       paused: boolean;
       next_service_date: string | null;
       routing_from: string | null;
     }>(
-      `select id, full_name, house_number, block, plan, paused_at is not null as paused,
+      `select id, full_name, house_number, phase, plan, paused_at is not null as paused,
               next_service_date::text, routing_from::text
        from signups where payment_status in ('active', 'booked')`
     ),
@@ -1816,10 +1816,10 @@ export async function getServiceCalendar(year: number, month1: number): Promise<
       note: string | null;
       full_name: string;
       house_number: string;
-      block: number | null;
+      phase: number | null;
       plan: PlanId;
     }>(
-      `select v.signup_id, v.service_date::text, v.crew, v.note, s.full_name, s.house_number, s.block, s.plan
+      `select v.signup_id, v.service_date::text, v.crew, v.note, s.full_name, s.house_number, s.phase, s.plan
        from service_visits v join signups s on s.id = v.signup_id
        where v.service_date between $1::date and $2::date
        order by lower(s.full_name)`,
@@ -1846,17 +1846,17 @@ export async function getServiceCalendar(year: number, month1: number): Promise<
       id: v.signup_id,
       fullName: v.full_name,
       houseNumber: v.house_number,
-      block: v.block,
+      phase: v.phase,
       plan: v.plan,
       worker: v.crew,
       note: v.note,
     });
   }
-  const person = (c: { id: string; full_name: string; house_number: string; block: number | null; plan: PlanId }): CalendarPerson => ({
+  const person = (c: { id: string; full_name: string; house_number: string; phase: number | null; plan: PlanId }): CalendarPerson => ({
     id: c.id,
     fullName: c.full_name,
     houseNumber: c.house_number,
-    block: c.block,
+    phase: c.phase,
     plan: c.plan,
   });
 
@@ -1891,7 +1891,7 @@ export async function getServiceCalendar(year: number, month1: number): Promise<
         id: row.id,
         fullName: row.full_name,
         houseNumber: row.house_number,
-        block: row.block,
+        phase: row.phase,
         plan: row.plan,
         overdue: false,
         projected: false,
@@ -1899,12 +1899,12 @@ export async function getServiceCalendar(year: number, month1: number): Promise<
     }
   }
 
-  const byBlock = (x: CalendarPerson, y: CalendarPerson) =>
-    (x.block ?? Infinity) - (y.block ?? Infinity) || x.houseNumber.localeCompare(y.houseNumber, undefined, { numeric: true });
+  const byPhase = (x: CalendarPerson, y: CalendarPerson) =>
+    (x.phase ?? Infinity) - (y.phase ?? Infinity) || x.houseNumber.localeCompare(y.houseNumber, undefined, { numeric: true });
   const out = dateKeys.map((d) => days.get(d)!);
   for (const day of out) {
-    day.serviced.sort(byBlock);
-    day.due.sort(byBlock);
+    day.serviced.sort(byPhase);
+    day.due.sort(byPhase);
   }
   return out;
 }
@@ -1913,7 +1913,7 @@ export interface ServiceStatusClient {
   id: string;
   fullName: string;
   houseNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
   paused: boolean;
   lastVisitDate: string | null;
@@ -1929,7 +1929,7 @@ export async function getServiceStatus(): Promise<{ clients: ServiceStatusClient
     id: c.id,
     fullName: c.fullName,
     houseNumber: c.houseNumber,
-    block: c.block,
+    phase: c.phase,
     plan: c.plan,
     paused: c.paused,
     lastVisitDate: c.lastVisitDate,
@@ -1937,7 +1937,7 @@ export async function getServiceStatus(): Promise<{ clients: ServiceStatusClient
     nextServiceDate: c.nextServiceDate,
     overdueSince: c.overdueSince,
   }));
-  const overdue = groupByBlock(clients.filter((c) => c.overdueSince !== null)).flatMap((g) => g.customers);
+  const overdue = groupByPhase(clients.filter((c) => c.overdueSince !== null)).flatMap((g) => g.customers);
   const rest = clients
     .filter((c) => c.overdueSince === null)
     .sort((a, b) => {
@@ -2019,7 +2019,7 @@ export async function getCustomerDetail(id: string): Promise<CustomerRow | null>
     plan: PlanId;
     payment_status: SignupRow["payment_status"];
     payment_method: SignupRow["payment_method"];
-    block: number | null;
+    phase: number | null;
     service_slot: number | null;
     scheduled_visit_date: string | null;
     notes: string | null;
@@ -2027,7 +2027,7 @@ export async function getCustomerDetail(id: string): Promise<CustomerRow | null>
     awaiting_days: number | null;
   }>(
     `select id, full_name, house_number, whatsapp_number, plan, payment_status, payment_method,
-            block, service_slot, scheduled_visit_date::text, notes, paused_at,
+            phase, service_slot, scheduled_visit_date::text, notes, paused_at,
             case when payment_status = 'booked' then floor(extract(epoch from (now() - created_at)) / 86400)::int end as awaiting_days
      from signups where id = $1`,
     [id]
@@ -2043,7 +2043,7 @@ export async function getCustomerDetail(id: string): Promise<CustomerRow | null>
     plan: r.plan,
     paymentStatus: r.payment_status,
     paymentMethod: r.payment_method,
-    block: r.block,
+    phase: r.phase,
     serviceSlot: r.service_slot,
     scheduledVisitDate: r.scheduled_visit_date,
     notes: r.notes,
@@ -2203,11 +2203,11 @@ export async function getMessageCentreList(): Promise<MessageCentreCustomer[]> {
 export type ReviewAction = "approve" | "hide" | "unhide" | "reply";
 
 /**
- * The block to show beside a review on the public site: the block of the customer(s) whose phone number
- * matches, but only when that is unambiguous (one distinct block). No match, or a match with no block
- * recorded, shows the first name alone. The reviewer is never asked for a block - it comes from our own records.
+ * The phase to show beside a review on the public site: the phase of the customer(s) whose phone number
+ * matches, but only when that is unambiguous (one distinct phase). No match, or a match with no phase
+ * recorded, shows the first name alone. The reviewer is never asked for a phase - it comes from our own records.
  */
-const REVIEW_SITE_BLOCK_SQL = `(select case when count(distinct s.block) = 1 then max(s.block) end
+const REVIEW_SITE_PHASE_SQL = `(select case when count(distinct s.phase) = 1 then max(s.phase) end
                                  from signups s where s.whatsapp_number = r.phone)`;
 
 /**
@@ -2236,24 +2236,24 @@ export async function createReview(input: {
 export interface PublicReview {
   id: string;
   firstName: string;
-  block: number | null;
+  phase: number | null;
   rating: number;
   comment: string;
   reply: string | null;
 }
 
-/** Approved and not hidden, newest first. Only a first name and a block leave this query - no phone, no surname, no address. */
+/** Approved and not hidden, newest first. Only a first name and a phase leave this query - no phone, no surname, no address. */
 export async function getPublicReviews(limit = 30): Promise<PublicReview[]> {
   const { rows } = await getPool().query<{
     id: string;
     first_name: string;
-    block: number | null;
+    phase: number | null;
     rating: number;
     comment: string;
     reply: string | null;
   }>(
     `select r.id, left(split_part(btrim(r.name), ' ', 1), 40) as first_name,
-            ${REVIEW_SITE_BLOCK_SQL} as block, r.rating, r.comment, r.reply
+            ${REVIEW_SITE_PHASE_SQL} as phase, r.rating, r.comment, r.reply
      from reviews r
      where r.status = 'approved' and not r.hidden
      order by r.created_at desc
@@ -2263,7 +2263,7 @@ export async function getPublicReviews(limit = 30): Promise<PublicReview[]> {
   return rows.map((r) => ({
     id: r.id,
     firstName: r.first_name,
-    block: r.block,
+    phase: r.phase,
     rating: r.rating,
     comment: r.comment,
     reply: r.reply,
@@ -2273,7 +2273,7 @@ export async function getPublicReviews(limit = 30): Promise<PublicReview[]> {
 export interface ReviewCustomerMatch {
   fullName: string;
   houseNumber: string;
-  block: number | null;
+  phase: number | null;
   status: string;
 }
 
@@ -2289,8 +2289,8 @@ export interface OwnerReview {
   createdAt: string;
   /** Customers on our list with this phone number - empty means no match. Current customers first. */
   matches: ReviewCustomerMatch[];
-  /** Block that would show on the public site beside this review. */
-  siteBlock: number | null;
+  /** Phase that would show on the public site beside this review. */
+  sitePhase: number | null;
 }
 
 /** Everything, with the phone matched against the customer list. Pending (not hidden) first so the queue is at the top. */
@@ -2305,15 +2305,15 @@ export async function getOwnerReviews(): Promise<OwnerReview[]> {
     hidden: boolean;
     reply: string | null;
     created_at: string;
-    matches: { fullName: string; houseNumber: string; block: number | null; status: string }[];
-    site_block: number | null;
+    matches: { fullName: string; houseNumber: string; phase: number | null; status: string }[];
+    site_phase: number | null;
   }>(
     `select r.id, r.name, r.phone, r.rating, r.comment, r.status, r.hidden, r.reply, r.created_at,
             coalesce((select json_agg(json_build_object(
-                        'fullName', s.full_name, 'houseNumber', s.house_number, 'block', s.block, 'status', s.payment_status)
+                        'fullName', s.full_name, 'houseNumber', s.house_number, 'phase', s.phase, 'status', s.payment_status)
                         order by (s.payment_status in ('active', 'booked')) desc, s.created_at desc)
                       from signups s where s.whatsapp_number = r.phone), '[]'::json) as matches,
-            ${REVIEW_SITE_BLOCK_SQL} as site_block
+            ${REVIEW_SITE_PHASE_SQL} as site_phase
      from reviews r
      order by (r.status = 'pending' and not r.hidden) desc, r.created_at desc`
   );
@@ -2328,7 +2328,7 @@ export async function getOwnerReviews(): Promise<OwnerReview[]> {
     reply: r.reply,
     createdAt: r.created_at,
     matches: r.matches,
-    siteBlock: r.site_block,
+    sitePhase: r.site_phase,
   }));
 }
 
@@ -2403,7 +2403,7 @@ export interface OpsClient {
   id: string;
   fullName: string;
   houseNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
   paused: boolean;
   lastVisitDate: string | null;
@@ -2422,7 +2422,7 @@ export async function getOpsClients(): Promise<OpsClient[]> {
     id: string;
     full_name: string;
     house_number: string;
-    block: number | null;
+    phase: number | null;
     plan: PlanId;
     paused: boolean;
     last_visit_date: string | null;
@@ -2431,7 +2431,7 @@ export async function getOpsClients(): Promise<OpsClient[]> {
     next_service_date_manual: boolean;
     routing_from: string | null;
   }>(
-    `select s.id, s.full_name, s.house_number, s.block, s.plan, s.paused_at is not null as paused,
+    `select s.id, s.full_name, s.house_number, s.phase, s.plan, s.paused_at is not null as paused,
             lv.service_date::text as last_visit_date, lv.crew as last_visit_worker,
             s.next_service_date::text, s.next_service_date_manual, s.routing_from::text
      from signups s
@@ -2453,7 +2453,7 @@ export async function getOpsClients(): Promise<OpsClient[]> {
       id: r.id,
       fullName: r.full_name,
       houseNumber: r.house_number,
-      block: r.block,
+      phase: r.phase,
       plan: r.plan,
       paused: r.paused,
       lastVisitDate: r.last_visit_date,
@@ -2466,10 +2466,10 @@ export async function getOpsClients(): Promise<OpsClient[]> {
   });
 }
 
-/** Clients whose next service date has passed, in walking order (block, then house number). */
+/** Clients whose next service date has passed, in walking order (phase, then house number). */
 export async function getOverdueClients(): Promise<OpsClient[]> {
   const overdue = (await getOpsClients()).filter((c) => c.overdueSince !== null);
-  return groupByBlock(overdue).flatMap((g) => g.customers);
+  return groupByPhase(overdue).flatMap((g) => g.customers);
 }
 
 export interface ClientVisit {

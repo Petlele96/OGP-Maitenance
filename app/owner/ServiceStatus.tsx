@@ -7,7 +7,7 @@ interface Client {
   id: string;
   fullName: string;
   houseNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
   paused: boolean;
   lastVisitDate: string | null;
@@ -109,7 +109,7 @@ export default function ServiceStatus({ onOverdueCount }: { onOverdueCount: (n: 
                   <span className="font-normal text-brand-500">
                     {" "}
                     · House {c.houseNumber}
-                    {c.block !== null && <> · Block {c.block}</>}
+                    {c.phase !== null && <> · Phase {c.phase}</>}
                   </span>
                 </p>
                 {c.overdueSince && (

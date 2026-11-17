@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
     whatsappNumber,
     plan: planId,
     amount: plan.amount,
-    block: parsed.data.block ?? null,
+    phase: parsed.data.phase ?? null,
     payAfterWhen: parsed.data.payAfterWhen ?? "service_day",
   });
 

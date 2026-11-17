@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MIN_BLOCK, MAX_BLOCK } from "./sort";
+import { MIN_PHASE, MAX_PHASE } from "./sort";
 import { REVIEW_COMMENT_MAX, REVIEW_NAME_MAX } from "./reviews";
 
 // South African mobile numbers: 0821234567, +27821234567, or 27821234567
@@ -21,8 +21,12 @@ export const signupSchema = z.object({
   agreedToTerms: z.literal(true, {
     errorMap: () => ({ message: "You must agree to the Terms and Conditions" }),
   }),
-  // Not compulsory - some streets have no name, some tenants don't know theirs.
-  block: z.number().int().min(MIN_BLOCK).max(MAX_BLOCK).nullable().optional(),
+  // Required: exactly Phase 1 to 5.
+  phase: z
+    .number({ required_error: "Choose your phase", invalid_type_error: "Choose your phase" })
+    .int("Choose your phase")
+    .min(MIN_PHASE, "Choose your phase")
+    .max(MAX_PHASE, "Choose your phase"),
   // Only read by /api/book: when a pay-after customer wants to pay. Defaults to their service day.
   payAfterWhen: z.enum(["service_day", "month_end"]).optional(),
 });
@@ -48,7 +52,12 @@ export const manualSignupSchema = z.object({
   paymentMethod: z.enum(["payfast", "eft", "cash"]),
   // Required, with no default: the owner must say whether they have already paid.
   paymentState: z.enum(["paid", "awaiting"], { errorMap: () => ({ message: "Choose whether they have already paid or are awaiting payment" }) }),
-  block: z.number().int().min(MIN_BLOCK).max(MAX_BLOCK).nullable().optional(),
+  // Required, like the signup form. (Editing a customer who has no phase yet stays nullable, below.)
+  phase: z
+    .number({ required_error: "Choose a phase", invalid_type_error: "Choose a phase" })
+    .int()
+    .min(MIN_PHASE)
+    .max(MAX_PHASE),
   serviceSlot: z.number().int().min(1).max(14).nullable().optional(),
   scheduledVisitDate: z.string().regex(DATE_KEY_REGEX).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
@@ -64,7 +73,7 @@ export const updateSignupSchema = z.object({
   whatsappNumber: z.string().trim().regex(SA_MOBILE_REGEX, "Enter a valid South African cell number"),
   plan: z.enum(["monthly", "annual", "once-off"]),
   paymentMethod: z.enum(["payfast", "eft", "cash"]),
-  block: z.number().int().min(MIN_BLOCK).max(MAX_BLOCK).nullable(),
+  phase: z.number().int().min(MIN_PHASE).max(MAX_PHASE).nullable(),
   serviceSlot: z.number().int().min(1).max(14).nullable(),
   scheduledVisitDate: z.string().regex(DATE_KEY_REGEX).nullable(),
   notes: z.string().max(2000).nullable(),

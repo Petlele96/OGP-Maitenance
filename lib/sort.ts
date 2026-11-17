@@ -1,8 +1,10 @@
-export const MIN_BLOCK = 1;
-export const MAX_BLOCK = 6;
+export const MIN_PHASE = 1;
+export const MAX_PHASE = 5;
+/** Platinum Village is laid out in five phases. */
+export const PHASES = [1, 2, 3, 4, 5] as const;
 
-export function isValidBlock(block: number): boolean {
-  return Number.isInteger(block) && block >= MIN_BLOCK && block <= MAX_BLOCK;
+export function isValidPhase(phase: number): boolean {
+  return Number.isInteger(phase) && phase >= MIN_PHASE && phase <= MAX_PHASE;
 }
 
 /**
@@ -30,34 +32,34 @@ export function compareHouseNumbers(a: string, b: string): number {
   return pa.rest.localeCompare(pb.rest);
 }
 
-export interface BlockGroup<T> {
-  block: number | null;
+export interface PhaseGroup<T> {
+  phase: number | null;
   customers: T[];
 }
 
 /**
- * Groups by block (1-6, ascending), sorted by house number within each group.
- * Customers with no block are grouped under `block: null`, listed last.
+ * Groups by phase (1-5, ascending), sorted by house number within each group.
+ * Customers with no phase are grouped under `phase: null`, listed last.
  */
-export function groupByBlock<T extends { block: number | null; houseNumber: string }>(
+export function groupByPhase<T extends { phase: number | null; houseNumber: string }>(
   customers: T[]
-): BlockGroup<T>[] {
-  const byBlock = new Map<number | null, T[]>();
+): PhaseGroup<T>[] {
+  const byPhase = new Map<number | null, T[]>();
   for (const customer of customers) {
-    const key = customer.block;
-    const list = byBlock.get(key) ?? [];
+    const key = customer.phase;
+    const list = byPhase.get(key) ?? [];
     list.push(customer);
-    byBlock.set(key, list);
+    byPhase.set(key, list);
   }
 
-  const blocks = Array.from(byBlock.keys()).sort((a, b) => {
+  const phases = Array.from(byPhase.keys()).sort((a, b) => {
     if (a === null) return 1;
     if (b === null) return -1;
     return a - b;
   });
 
-  return blocks.map((block) => ({
-    block,
-    customers: [...(byBlock.get(block) ?? [])].sort((a, b) => compareHouseNumbers(a.houseNumber, b.houseNumber)),
+  return phases.map((phase) => ({
+    phase,
+    customers: [...(byPhase.get(phase) ?? [])].sort((a, b) => compareHouseNumbers(a.houseNumber, b.houseNumber)),
   }));
 }

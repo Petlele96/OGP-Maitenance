@@ -3,6 +3,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { PHASES } from "@/lib/sort";
 import { PLANS, type PlanId } from "@/lib/plans";
 import { ASK_QUESTION_LINK, COMPANY_NAME, COMPANY_REG, planPhrase } from "@/lib/site";
 import { SiteFooter } from "./components/SiteFooter";
@@ -37,7 +38,7 @@ export default function SignupPage() {
   const [fullName, setFullName] = useState("");
   const [houseNumber, setHouseNumber] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
-  const [block, setBlock] = useState("");
+  const [phase, setPhase] = useState("");
   const [plan, setPlan] = useState<PlanId>("monthly");
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [submittingAction, setSubmittingAction] = useState<"pay" | "book" | null>(null);
@@ -51,6 +52,10 @@ export default function SignupPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (phase === "") {
+      setError("Please choose your phase.");
+      return;
+    }
     if (plan === "monthly" && payTiming === "after_service") {
       await handleBook();
       return;
@@ -68,7 +73,7 @@ export default function SignupPage() {
           whatsappNumber,
           plan,
           agreedToTerms,
-          block: block === "" ? null : Number(block),
+          phase: Number(phase),
         }),
       });
       const data = await res.json();
@@ -111,7 +116,7 @@ export default function SignupPage() {
           whatsappNumber,
           plan,
           agreedToTerms,
-          block: block === "" ? null : Number(block),
+          phase: Number(phase),
           payAfterWhen,
         }),
       });
@@ -379,19 +384,22 @@ export default function SignupPage() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <label htmlFor="block" className="text-sm font-medium text-navy/70">
-                Block <span className="font-normal text-navy/40">(optional)</span>
+              <label htmlFor="phase" className="text-sm font-medium text-navy/70">
+                Phase
               </label>
               <select
-                id="block"
-                value={block}
-                onChange={(e) => setBlock(e.target.value)}
+                id="phase"
+                required
+                value={phase}
+                onChange={(e) => setPhase(e.target.value)}
                 className="h-14 border border-navy/15 bg-white px-4 text-base text-navy outline-none focus:border-skyblue"
               >
-                <option value="">Not sure / no block</option>
-                {[1, 2, 3, 4, 5, 6].map((b) => (
-                  <option key={b} value={b}>
-                    Block {b}
+                <option value="" disabled>
+                  Select your phase
+                </option>
+                {PHASES.map((p) => (
+                  <option key={p} value={p}>
+                    Phase {p}
                   </option>
                 ))}
               </select>

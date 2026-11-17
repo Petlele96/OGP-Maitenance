@@ -8,7 +8,7 @@ import { Stars } from "../components/Stars";
 interface CustomerMatch {
   fullName: string;
   houseNumber: string;
-  block: number | null;
+  phase: number | null;
   status: string;
 }
 
@@ -23,7 +23,7 @@ interface OwnerReview {
   reply: string | null;
   createdAt: string;
   matches: CustomerMatch[];
-  siteBlock: number | null;
+  sitePhase: number | null;
 }
 
 function stateOf(r: OwnerReview): { label: string; className: string } {
@@ -37,9 +37,9 @@ function formatDay(iso: string): string {
 }
 
 function matchLine(m: CustomerMatch): string {
-  const block = m.block === null ? "block not recorded" : `Block ${m.block}`;
+  const phase = m.phase === null ? "phase not recorded" : `Phase ${m.phase}`;
   const status = m.status === "cancelled" || m.status === "archived" ? ` (${m.status})` : "";
-  return `${m.fullName} · House ${m.houseNumber} · ${block}${status}`;
+  return `${m.fullName} · House ${m.houseNumber} · ${phase}${status}`;
 }
 
 export default function ReviewsTab({ onChanged }: { onChanged?: () => void }) {
@@ -166,7 +166,7 @@ export default function ReviewsTab({ onChanged }: { onChanged?: () => void }) {
                   {r.comment && <p className="mt-2 whitespace-pre-line text-sm text-brand-900">{r.comment}</p>}
 
                   <p className="mt-2 text-xs text-brand-400">
-                    Shows on the site as: {reviewerLabel(r.name.trim().split(/\s+/)[0], r.siteBlock)}
+                    Shows on the site as: {reviewerLabel(r.name.trim().split(/\s+/)[0], r.sitePhase)}
                   </p>
 
                   {r.reply && replyingId !== r.id && (

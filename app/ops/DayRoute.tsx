@@ -10,7 +10,7 @@ interface Yard {
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
   notes: string | null;
   status: "done" | "not_done" | "pending";
@@ -260,7 +260,7 @@ export default function DayRoute({
                         <span className="text-brand-500">
                           {" "}
                           · House {y.houseNumber}
-                          {y.block !== null && <> · Block {y.block}</>}
+                          {y.phase !== null && <> · Phase {y.phase}</>}
                         </span>
                         {y.overdueSince && (
                           <span className="ml-2 rounded-md bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-800">
@@ -353,7 +353,7 @@ export default function DayRoute({
                     </p>
                     <p className="text-sm text-brand-700">
                       House {y.houseNumber}
-                      {y.block !== null && <span className="text-brand-400"> · Block {y.block}</span>}
+                      {y.phase !== null && <span className="text-brand-400"> · Phase {y.phase}</span>}
                       <span className="text-brand-400"> · {PLAN_LABELS[y.plan]}</span>
                     </p>
                     <a

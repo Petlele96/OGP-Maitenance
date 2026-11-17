@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
     plan: parsed.data.plan,
     paymentMethod: parsed.data.paymentMethod,
     paymentState: parsed.data.paymentState,
-    block: parsed.data.block ?? null,
+    phase: parsed.data.phase ?? null,
     serviceSlot: parsed.data.serviceSlot ?? null,
     scheduledVisitDate: parsed.data.scheduledVisitDate ?? null,
     notes: parsed.data.notes ?? null,

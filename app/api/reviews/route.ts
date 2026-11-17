@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Public. Approved, un-hidden reviews only, newest first - first name and block, never a surname or
+ * Public. Approved, un-hidden reviews only, newest first - first name and phase, never a surname or
  * house number. Briefly cached so a busy homepage doesn't hit the database on every view, which also
  * bounds how long a hidden review can linger.
  */

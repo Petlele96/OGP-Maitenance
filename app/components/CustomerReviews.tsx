@@ -7,7 +7,7 @@ import { Stars } from "./Stars";
 interface PublicReview {
   id: string;
   firstName: string;
-  block: number | null;
+  phase: number | null;
   rating: number;
   comment: string;
   reply: string | null;
@@ -48,7 +48,7 @@ export function CustomerReviews() {
             {r.comment && (
               <p className="mt-2 whitespace-pre-line text-[17px] leading-relaxed text-navy/80">{r.comment}</p>
             )}
-            <p className="mt-2 text-sm font-semibold text-navy">{reviewerLabel(r.firstName, r.block)}</p>
+            <p className="mt-2 text-sm font-semibold text-navy">{reviewerLabel(r.firstName, r.phase)}</p>
             {r.reply && (
               <div className="mt-3 rounded-lg bg-cream px-4 py-3">
                 <p className="text-xs font-bold uppercase tracking-wide text-navy/50">Reply from OGP Services</p>

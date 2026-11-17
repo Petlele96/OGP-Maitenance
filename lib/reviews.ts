@@ -9,7 +9,7 @@ export const REVIEW_REPLY_MAX = 500;
 export const REVIEW_MAX_PER_HOUR = 5;
 export const REVIEW_MAX_PER_DAY = 15;
 
-/** "Thabo, Block 3" - the only identifying detail ever shown publicly. No surname, no phone, no house number. */
-export function reviewerLabel(firstName: string, block: number | null): string {
-  return block === null ? firstName : `${firstName}, Block ${block}`;
+/** "Thabo, Phase 3" - the only identifying detail ever shown publicly. No surname, no phone, no house number. */
+export function reviewerLabel(firstName: string, phase: number | null): string {
+  return phase === null ? firstName : `${firstName}, Phase ${phase}`;
 }

@@ -9,8 +9,8 @@ import ClientsTab from "./ClientsTab";
 type ViewMode = "today" | "tomorrow" | "week" | "booked" | "overdue" | "clients";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
 
-interface BlockGroup<T> {
-  block: number | null;
+interface PhaseGroup<T> {
+  phase: number | null;
   customers: T[];
 }
 
@@ -19,7 +19,7 @@ interface TomorrowCustomer {
   fullName: string;
   houseNumber: string;
   whatsappNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
   notes: string | null;
 }
@@ -27,7 +27,7 @@ interface TomorrowCustomer {
 interface TomorrowData {
   date: string;
   total: number;
-  groups: BlockGroup<TomorrowCustomer>[];
+  groups: PhaseGroup<TomorrowCustomer>[];
 }
 
 interface WeekDay {
@@ -41,7 +41,7 @@ interface BookedCustomer {
   houseNumber: string;
   whatsappNumber: string;
   plan: PlanId;
-  block: number | null;
+  phase: number | null;
   serviceDayLabel: string;
   paymentLinkSentAt: string | null;
   paymentLinkExpired: boolean;
@@ -50,7 +50,7 @@ interface BookedCustomer {
 
 interface BookedData {
   total: number;
-  groups: BlockGroup<BookedCustomer>[];
+  groups: PhaseGroup<BookedCustomer>[];
 }
 
 function formatDayHeading(dateKey: string): string {
@@ -58,8 +58,8 @@ function formatDayHeading(dateKey: string): string {
   return date.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
 }
 
-function blockHeading(block: number | null): string {
-  return block === null ? "No block set" : `Block ${block}`;
+function phaseHeading(phase: number | null): string {
+  return phase === null ? "No phase set" : `Phase ${phase}`;
 }
 
 function planLabel(plan: PlanId): string {
@@ -351,9 +351,9 @@ export default function OpsPage() {
                 {tomorrow.total} customer{tomorrow.total === 1 ? "" : "s"} tomorrow. Send reminders now.
               </p>
               {tomorrow.groups.map((group) => (
-                <div key={group.block ?? "none"}>
+                <div key={group.phase ?? "none"}>
                   <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-500">
-                    {blockHeading(group.block)}
+                    {phaseHeading(group.phase)}
                   </h2>
                   <ul className="flex flex-col gap-3">
                     {group.customers.map((c) => (
@@ -463,9 +463,9 @@ export default function OpsPage() {
                 {booked.total} customer{booked.total === 1 ? "" : "s"} booked, waiting on payment.
               </p>
               {booked.groups.map((group) => (
-                <div key={group.block ?? "none"}>
+                <div key={group.phase ?? "none"}>
                   <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-500">
-                    {blockHeading(group.block)}
+                    {phaseHeading(group.phase)}
                   </h2>
                   <ul className="flex flex-col gap-3">
                     {group.customers.map((c) => (

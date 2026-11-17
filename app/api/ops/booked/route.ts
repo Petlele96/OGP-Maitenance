@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/ops-auth";
 import { getBookedCustomers, getEffectiveNextServiceDate } from "@/lib/db";
 import { nowInJohannesburg } from "@/lib/schedule";
-import { groupByBlock } from "@/lib/sort";
+import { groupByPhase } from "@/lib/sort";
 
 export const runtime = "nodejs";
 
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
         houseNumber: c.houseNumber,
         whatsappNumber: c.whatsappNumber,
         plan: c.plan,
-        block: c.block,
+        phase: c.phase,
         serviceDayLabel: formatServiceDay(
           await getEffectiveNextServiceDate(c.id, { service_slot: c.serviceSlot, scheduled_visit_date: c.scheduledVisitDate }, now)
         ),
@@ -39,6 +39,6 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     total: customers.length,
-    groups: groupByBlock(customers),
+    groups: groupByPhase(customers),
   });
 }

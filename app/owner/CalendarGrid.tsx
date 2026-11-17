@@ -7,7 +7,7 @@ interface Person {
   id: string;
   fullName: string;
   houseNumber: string;
-  block: number | null;
+  phase: number | null;
   plan: PlanId;
 }
 

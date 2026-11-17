@@ -117,7 +117,7 @@ export async function GET(req: NextRequest) {
       fullName: c.fullName,
       houseNumber: c.houseNumber,
       whatsappNumber: c.whatsappNumber,
-      block: c.block,
+      phase: c.phase,
       paid: c.paymentStatus === "active",
       payAfterService: c.paymentTiming === "pay_after_service",
       welcomed: c.welcomed,
