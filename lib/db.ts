@@ -4,6 +4,7 @@ import { PLANS, type PlanId, isSubscriberPlan } from "./plans";
 import { groupByPhase } from "./sort";
 import { nextDebitDate } from "./billing";
 import { paymentDueDate, dueStatus, daysBetween, type PayAfterWhen } from "./payments";
+import { findIssueType, monthBounds, type IssueStatus } from "./issues";
 import {
   toDateKey,
   visitDaysForSlotInMonth,
@@ -2578,4 +2579,259 @@ export async function setNextServiceDate(
     [signupId, date, todayKey]
   );
   return "ok";
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// Maintenance issues (logged from ops, managed from the owner dashboard)
+
+export interface IssueItem {
+  id: string;
+  /** Group key: water, electrical, structural, grounds_safety. */
+  category: string;
+  /** The specific item picked, e.g. burst_pipe. */
+  issueType: string;
+  note: string | null;
+  urgent: boolean;
+  signupId: string | null;
+  customerName: string | null;
+  locationLabel: string;
+  phase: number | null;
+  loggedBy: string;
+  loggedAt: string;
+  status: IssueStatus;
+  reportedAt: string | null;
+  resolvedAt: string | null;
+  reportDescription: string | null;
+  aiDescription: string | null;
+  aiStatus: "done" | "failed" | null;
+  aiFlag: boolean;
+  aiFlagReason: string | null;
+  aiFlagDismissed: boolean;
+}
+
+interface IssueDbRow {
+  id: string;
+  category: string;
+  issue_type: string;
+  note: string | null;
+  urgent: boolean;
+  signup_id: string | null;
+  customer_name: string | null;
+  location_label: string;
+  phase: number | null;
+  logged_by: string;
+  logged_at: Date;
+  status: IssueStatus;
+  reported_at: Date | null;
+  resolved_at: Date | null;
+  report_description: string | null;
+  ai_description: string | null;
+  ai_status: "done" | "failed" | null;
+  ai_flag: boolean;
+  ai_flag_reason: string | null;
+  ai_flag_dismissed: boolean;
+}
+
+const ISSUE_COLUMNS = `i.id, i.category, i.issue_type, i.note, i.urgent, i.signup_id, s.full_name as customer_name,
+  i.location_label, i.phase, i.logged_by, i.logged_at, i.status, i.reported_at, i.resolved_at,
+  i.report_description, i.ai_description, i.ai_status, i.ai_flag, i.ai_flag_reason, i.ai_flag_dismissed`;
+
+function toIssueItem(r: IssueDbRow): IssueItem {
+  return {
+    id: r.id,
+    category: r.category,
+    issueType: r.issue_type,
+    note: r.note,
+    urgent: r.urgent,
+    signupId: r.signup_id,
+    customerName: r.customer_name,
+    locationLabel: r.location_label,
+    phase: r.phase,
+    loggedBy: r.logged_by,
+    loggedAt: r.logged_at.toISOString(),
+    status: r.status,
+    reportedAt: r.reported_at ? r.reported_at.toISOString() : null,
+    resolvedAt: r.resolved_at ? r.resolved_at.toISOString() : null,
+    reportDescription: r.report_description,
+    aiDescription: r.ai_description,
+    aiStatus: r.ai_status,
+    aiFlag: r.ai_flag,
+    aiFlagReason: r.ai_flag_reason,
+    aiFlagDismissed: r.ai_flag_dismissed,
+  };
+}
+
+/** Customers an issue can be attached to: anyone on the service list. Name, house and phase only. */
+export interface IssueCustomerOption {
+  id: string;
+  fullName: string;
+  houseNumber: string;
+  phase: number | null;
+}
+
+export async function listIssueCustomers(): Promise<IssueCustomerOption[]> {
+  const { rows } = await getPool().query<{ id: string; full_name: string; house_number: string; phase: number | null }>(
+    `select id, full_name, house_number, phase from signups
+     where payment_status in ('active', 'booked') order by lower(full_name)`
+  );
+  return rows.map((r) => ({ id: r.id, fullName: r.full_name, houseNumber: r.house_number, phase: r.phase }));
+}
+
+export interface CreateIssueInput {
+  issueType: string;
+  note: string | null;
+  urgent: boolean;
+  signupId: string | null;
+  locationLabel: string;
+  phase: number | null;
+  loggedBy: string;
+  photo: Buffer;
+  thumb: Buffer;
+}
+
+/** Saves the issue and its photo in one statement, so there is never an issue without its photo. */
+export async function createIssue(input: CreateIssueInput): Promise<string> {
+  const found = findIssueType(input.issueType);
+  if (!found) throw new Error("Unknown issue type");
+  const { rows } = await getPool().query<{ id: string }>(
+    `with i as (
+       insert into maintenance_issues (category, issue_type, note, urgent, signup_id, location_label, phase, logged_by)
+       values ($1, $2, $3, $4, $5, $6, $7, $8) returning id
+     ), p as (
+       insert into issue_photos (issue_id, photo, thumb) select id, $9, $10 from i
+     )
+     select id from i`,
+    [
+      found.group.key,
+      input.issueType,
+      input.note,
+      input.urgent,
+      input.signupId,
+      input.locationLabel,
+      input.phase,
+      input.loggedBy,
+      input.photo,
+      input.thumb,
+    ]
+  );
+  return rows[0].id;
+}
+
+/** Everything, newest first. No photos - those are fetched one at a time. */
+export async function listIssues(): Promise<IssueItem[]> {
+  const { rows } = await getPool().query<IssueDbRow>(
+    `select ${ISSUE_COLUMNS} from maintenance_issues i left join signups s on s.id = i.signup_id
+     order by i.logged_at desc`
+  );
+  return rows.map(toIssueItem);
+}
+
+export interface IssueCounts {
+  /** Urgent and not yet resolved. */
+  urgentOpen: number;
+  /** The AI thinks it is more serious than marked, and the owner has not yet looked. */
+  flagged: number;
+}
+
+export async function getIssueCounts(): Promise<IssueCounts> {
+  const { rows } = await getPool().query<{ urgent_open: string; flagged: string }>(
+    `select count(*) filter (where urgent and status <> 'resolved') as urgent_open,
+            count(*) filter (where ai_flag and not ai_flag_dismissed and not urgent and status <> 'resolved') as flagged
+     from maintenance_issues`
+  );
+  return { urgentOpen: Number(rows[0].urgent_open), flagged: Number(rows[0].flagged) };
+}
+
+/** The full photo or the small copy. Null when the issue does not exist. */
+export async function getIssuePhoto(id: string, size: "full" | "thumb"): Promise<Buffer | null> {
+  const column = size === "thumb" ? "thumb" : "photo";
+  const { rows } = await getPool().query<{ data: Buffer }>(`select ${column} as data from issue_photos where issue_id = $1`, [id]);
+  return rows[0]?.data ?? null;
+}
+
+/** One issue with its full photo, for the AI step. */
+export async function getIssueForAssist(id: string): Promise<{ issue: IssueItem; photo: Buffer } | null> {
+  const { rows } = await getPool().query<IssueDbRow & { photo: Buffer }>(
+    `select ${ISSUE_COLUMNS}, p.photo from maintenance_issues i
+     join issue_photos p on p.issue_id = i.id left join signups s on s.id = i.signup_id where i.id = $1`,
+    [id]
+  );
+  if (!rows[0]) return null;
+  return { issue: toIssueItem(rows[0]), photo: rows[0].photo };
+}
+
+/**
+ * Stores the AI's suggestion. The flag only counts while the worker did not already mark it urgent, and it is
+ * computed here against the current urgency - the AI itself never changes urgent or status.
+ */
+export async function saveIssueAssist(id: string, r: { description: string; moreSerious: boolean; reason: string | null }): Promise<void> {
+  await getPool().query(
+    `update maintenance_issues
+        set ai_description = $2, ai_flag = ($3 and not urgent), ai_flag_reason = case when $3 and not urgent then $4 else null end,
+            ai_status = 'done', ai_ran_at = now(), ai_flag_dismissed = false
+      where id = $1`,
+    [id, r.description, r.moreSerious, r.reason]
+  );
+}
+
+export async function markIssueAssistFailed(id: string): Promise<void> {
+  await getPool().query(`update maintenance_issues set ai_status = 'failed', ai_ran_at = now() where id = $1`, [id]);
+}
+
+/**
+ * Moves an issue to a status and stamps the date it was set. Open clears the later dates, Reported keeps no
+ * resolved date, Resolved keeps the reported date. Choosing the status it already has changes nothing.
+ */
+export async function setIssueStatus(id: string, status: IssueStatus): Promise<boolean> {
+  const { rows } = await getPool().query(
+    `update maintenance_issues
+        set status = $2,
+            reported_at = case when $2 = 'open' then null when $2 = 'reported' then now() else reported_at end,
+            resolved_at = case when $2 = 'resolved' then now() else null end
+      where id = $1 and status <> $2 returning id`,
+    [id, status]
+  );
+  return rows.length > 0;
+}
+
+/** Owner-only: the AI never calls this. Setting urgent also settles any flag. */
+export async function setIssueUrgent(id: string, urgent: boolean): Promise<boolean> {
+  const { rows } = await getPool().query(
+    `update maintenance_issues set urgent = $2, ai_flag_dismissed = case when $2 then true else ai_flag_dismissed end
+      where id = $1 returning id`,
+    [id, urgent]
+  );
+  return rows.length > 0;
+}
+
+export async function dismissIssueFlag(id: string): Promise<boolean> {
+  const { rows } = await getPool().query(`update maintenance_issues set ai_flag_dismissed = true where id = $1 returning id`, [id]);
+  return rows.length > 0;
+}
+
+/** The wording used in the monthly report. Empty goes back to the AI's line (or the issue type). */
+export async function setIssueReportDescription(id: string, description: string): Promise<boolean> {
+  const { rows } = await getPool().query(`update maintenance_issues set report_description = $2 where id = $1 returning id`, [
+    id,
+    description || null,
+  ]);
+  return rows.length > 0;
+}
+
+export interface IssueReportRow extends IssueItem {
+  thumb: Buffer | null;
+}
+
+/** Issues logged in a calendar month (Johannesburg dates), oldest first, with their small photo. */
+export async function getIssuesForMonth(month: string): Promise<IssueReportRow[]> {
+  const { from, to } = monthBounds(month);
+  const { rows } = await getPool().query<IssueDbRow & { thumb: Buffer | null }>(
+    `select ${ISSUE_COLUMNS}, p.thumb from maintenance_issues i
+     left join issue_photos p on p.issue_id = i.id left join signups s on s.id = i.signup_id
+     where (i.logged_at at time zone 'Africa/Johannesburg')::date between $1::date and $2::date
+     order by i.logged_at asc`,
+    [from, to]
+  );
+  return rows.map((r) => ({ ...toIssueItem(r), thumb: r.thumb }));
 }

@@ -8,7 +8,8 @@ import ReviewsTab from "./ReviewsTab";
 import SubscriptionsTab from "./SubscriptionsTab";
 import ServiceStatus from "./ServiceStatus";
 import PaymentLinkActions from "./PaymentLinkActions";
-import { ToBeScheduledPanel, PaymentsDuePanel, type ToBeScheduledItem, type PaymentsDueData } from "./BookingQueues";
+import { ToBeScheduledPanel, PaymentsDuePanel, CountCard, type ToBeScheduledItem, type PaymentsDueData } from "./BookingQueues";
+import IssuesTab from "./IssuesTab";
 import CustomerProfile from "./CustomerProfile";
 import {
   CustomerFields,
@@ -28,7 +29,7 @@ import {
 } from "./CustomerShared";
 
 type AuthState = "checking" | "unauthenticated" | "authenticated";
-type OwnerTab = "dashboard" | "customers" | "schedule" | "subscriptions" | "messages" | "reviews";
+type OwnerTab = "dashboard" | "customers" | "schedule" | "subscriptions" | "messages" | "reviews" | "issues";
 
 interface FailedOrOverdue {
   id: string;
@@ -88,6 +89,7 @@ interface DashboardData {
   bookedCount: number;
   toBeScheduled: ToBeScheduledItem[];
   paymentsDue: PaymentsDueData;
+  issues: { urgentOpen: number; flagged: number };
   bookedCustomers: BookedCustomer[];
 }
 
@@ -137,6 +139,7 @@ export default function OwnerPage() {
   const [addSubmitting, setAddSubmitting] = useState(false);
 
   const [messages, setMessages] = useState<MessageCentreCustomer[] | null>(null);
+  const handleUnauthorized = useCallback(() => setAuthState("unauthenticated"), []);
 
   const loadDashboard = useCallback(async () => {
     const res = await fetch("/api/owner/dashboard", { cache: "no-store" });
@@ -354,7 +357,7 @@ export default function OwnerPage() {
         </button>
       </header>
 
-      <div className="grid grid-cols-3 gap-1 rounded-xl bg-white p-1 shadow-sm ring-1 ring-brand-100">
+      <div className="grid grid-cols-4 gap-1 rounded-xl bg-white p-1 shadow-sm ring-1 ring-brand-100">
         {(
           [
             ["dashboard", "Dashboard"],
@@ -363,6 +366,7 @@ export default function OwnerPage() {
             ["subscriptions", "Subscriptions"],
             ["messages", "Messages"],
             ["reviews", `Reviews${data && data.pendingReviewCount > 0 ? ` (${data.pendingReviewCount})` : ""}`],
+            ["issues", `Issues${data && data.issues.urgentOpen + data.issues.flagged > 0 ? ` (${data.issues.urgentOpen + data.issues.flagged})` : ""}`],
           ] as [OwnerTab, string][]
         ).map(([id, label]) => (
           <button
@@ -378,11 +382,21 @@ export default function OwnerPage() {
       {tab === "schedule" && <ScheduleTab />}
       {tab === "subscriptions" && <SubscriptionsTab />}
       {tab === "reviews" && <ReviewsTab onChanged={loadDashboard} />}
+      {tab === "issues" && <IssuesTab onChanged={loadDashboard} onUnauthorized={handleUnauthorized} />}
 
       {tab === "dashboard" && data && (
         <>
           <ToBeScheduledPanel items={data.toBeScheduled} onChanged={loadDashboard} onView={setViewingCustomerId} />
           <PaymentsDuePanel data={data.paymentsDue} onChanged={loadDashboard} onView={setViewingCustomerId} />
+
+          <button onClick={() => setTab("issues")} className="text-left">
+            <CountCard
+              count={data.issues.urgentOpen}
+              title="Urgent issues"
+              waiting={`Urgent maintenance issues not resolved yet${data.issues.flagged > 0 ? `, and ${data.issues.flagged} flagged for your review` : ""}. Tap to open Issues.`}
+              clear={data.issues.flagged > 0 ? `No urgent issues, but ${data.issues.flagged} flagged for your review. Tap to open Issues.` : "No urgent maintenance issues are open."}
+            />
+          </button>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-brand-100">

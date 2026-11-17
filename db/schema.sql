@@ -276,3 +276,53 @@ alter table signups add constraint signups_pay_after_when_check check (pay_after
 -- Exactly Phase 1 to 5 (null allowed for customers who have no phase set yet).
 alter table signups drop constraint if exists signups_phase_check;
 alter table signups add constraint signups_phase_check check (phase between 1 and 5);
+
+-- Maintenance issues: things the crew notice around the estate (at a subscriber's property or anywhere else) that are
+-- not the yard service itself. Logged from the ops dashboard, managed from the owner dashboard. Nothing here is sent
+-- anywhere - the owner copies messages and downloads the monthly PDF by hand.
+-- category is the group (water, electrical, structural, grounds_safety) and issue_type is the specific item picked.
+-- location_label is a snapshot (House 12, or the free-text place) so reports never change if a customer is edited.
+-- The AI columns hold suggestions only: a one-line description and a flag. The AI never changes urgent or status.
+create table if not exists maintenance_issues (
+  id uuid primary key default gen_random_uuid(),
+  category text not null,
+  issue_type text not null,
+  note text,
+  urgent boolean not null,
+  signup_id uuid references signups(id) on delete set null,
+  location_label text not null,
+  phase integer,
+  logged_by text not null,
+  logged_at timestamptz not null default now(),
+  status text not null default 'open',
+  reported_at timestamptz,
+  resolved_at timestamptz,
+  report_description text,
+  ai_description text,
+  ai_status text,
+  ai_flag boolean not null default false,
+  ai_flag_reason text,
+  ai_flag_dismissed boolean not null default false,
+  ai_ran_at timestamptz
+);
+alter table maintenance_issues drop constraint if exists maintenance_issues_status_check;
+alter table maintenance_issues add constraint maintenance_issues_status_check check (status in ('open', 'reported', 'resolved'));
+alter table maintenance_issues drop constraint if exists maintenance_issues_phase_check;
+alter table maintenance_issues add constraint maintenance_issues_phase_check check (phase between 1 and 5);
+alter table maintenance_issues drop constraint if exists maintenance_issues_ai_status_check;
+alter table maintenance_issues add constraint maintenance_issues_ai_status_check check (ai_status in ('done', 'failed'));
+create index if not exists maintenance_issues_status_idx on maintenance_issues (status, logged_at desc);
+alter table maintenance_issues enable row level security;
+drop policy if exists "deny_anonymous_access" on maintenance_issues;
+create policy "deny_anonymous_access" on maintenance_issues for all to anon, authenticated using (false);
+
+-- The photo is required and lives in its own table so listing issues never drags image bytes along.
+-- photo is the full picture (a JPEG, shrunk on the phone before it is sent) and thumb is the small copy the PDF uses.
+create table if not exists issue_photos (
+  issue_id uuid primary key references maintenance_issues(id) on delete cascade,
+  photo bytea not null,
+  thumb bytea not null
+);
+alter table issue_photos enable row level security;
+drop policy if exists "deny_anonymous_access" on issue_photos;
+create policy "deny_anonymous_access" on issue_photos for all to anon, authenticated using (false);

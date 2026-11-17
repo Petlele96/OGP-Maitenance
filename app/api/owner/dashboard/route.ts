@@ -15,6 +15,7 @@ import {
   getEffectiveNextServiceDate,
   getOverdueClients,
   getPendingReviewCount,
+  getIssueCounts,
 } from "@/lib/db";
 import { nowInJohannesburg, toDateKey } from "@/lib/schedule";
 
@@ -48,6 +49,7 @@ export async function GET(req: NextRequest) {
     pendingReviewCount,
     toBeScheduled,
     paymentsDue,
+    issueCounts,
   ] = await Promise.all([
     getActiveCustomerCounts(),
     getOnceOffJobsThisMonth(),
@@ -62,6 +64,7 @@ export async function GET(req: NextRequest) {
     getPendingReviewCount(),
     getToBeScheduled(),
     getPaymentsDue(toDateKey(nowInJohannesburg())),
+    getIssueCounts(),
   ]);
 
   const now = nowInJohannesburg();
@@ -124,6 +127,7 @@ export async function GET(req: NextRequest) {
       trackingUrl: `${base}/track/${c.trackingToken}`,
       waitingDays: c.waitingDays,
     })),
+    issues: issueCounts,
     paymentsDue: {
       dueToday: paymentsDue.filter((p) => p.status === "today").length,
       overdue: paymentsDue.filter((p) => p.status === "overdue").length,

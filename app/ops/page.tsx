@@ -5,6 +5,7 @@ import { buildReminderLink, buildWhatsAppChatLink, buildDateChangedLink } from "
 import type { PlanId } from "@/lib/plans";
 import DayRoute, { type MovedInfo } from "./DayRoute";
 import ClientsTab from "./ClientsTab";
+import IssueForm from "./IssueForm";
 
 type ViewMode = "today" | "tomorrow" | "week" | "booked" | "overdue" | "clients";
 type AuthState = "checking" | "unauthenticated" | "authenticated";
@@ -88,6 +89,7 @@ export default function OpsPage() {
   const [loggingIn, setLoggingIn] = useState(false);
 
   const [view, setView] = useState<ViewMode>("today");
+  const [loggingIssue, setLoggingIssue] = useState(false);
   const [tomorrow, setTomorrow] = useState<TomorrowData | null>(null);
   const [week, setWeek] = useState<WeekDay[] | null>(null);
   const [booked, setBooked] = useState<BookedData | null>(null);
@@ -277,10 +279,20 @@ export default function OpsPage() {
             {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
           </p>
         </div>
-        <button onClick={handleLogout} className="text-xs font-medium text-brand-500 underline">
-          Log out
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setLoggingIssue(true)}
+            className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-bold text-white"
+          >
+            Log issue
+          </button>
+          <button onClick={handleLogout} className="text-xs font-medium text-brand-500 underline">
+            Log out
+          </button>
+        </div>
       </header>
+
+      {loggingIssue && <IssueForm onClose={() => setLoggingIssue(false)} onUnauthorized={handleUnauthorized} />}
 
       <div className="mb-4 flex rounded-xl bg-white p-1 shadow-sm ring-1 ring-brand-100">
         {(

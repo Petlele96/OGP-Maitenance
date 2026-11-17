@@ -57,7 +57,7 @@ function recordContact(signupId: string) {
 }
 
 /** A big count that cannot be missed: red while anyone is waiting on the owner, calm when nobody is. */
-function CountCard({ count, title, waiting, clear }: { count: number; title: string; waiting: string; clear: string }) {
+export function CountCard({ count, title, waiting, clear }: { count: number; title: string; waiting: string; clear: string }) {
   return (
     <div
       className={`flex items-center gap-4 rounded-2xl p-4 shadow-sm ring-2 ${
