@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { PHASES } from "@/lib/sort";
 import { PLANS, type PlanId } from "@/lib/plans";
-import { ASK_QUESTION_LINK, COMPANY_NAME, COMPANY_REG, planPhrase } from "@/lib/site";
+import { ASK_QUESTION_LINK, COMPANY_NAME, COMPANY_REG, LANDSCAPING_QUOTE_LINK, planPhrase } from "@/lib/site";
 import { SiteFooter } from "./components/SiteFooter";
 import { BeforeAfterShowcase } from "./components/BeforeAfterShowcase";
 import { CustomerReviews } from "./components/CustomerReviews";
@@ -27,6 +27,16 @@ const WORKER_POINTS = [
   "They wear OGP Services clothing.",
   "They stay in the yard.",
   "They never enter the house.",
+];
+
+const LANDSCAPING_ITEMS = [
+  "New lawn — instant lawn or seeded",
+  "Garden design and planting",
+  "Tree planting",
+  "Tree felling and stump removal",
+  "Paving — driveways, walkways, braai areas",
+  "Irrigation and sprinklers",
+  "Artificial grass",
 ];
 
 const CTA_BUTTON_CLASS =
@@ -307,6 +317,9 @@ export default function SignupPage() {
               {payAfterWhen === "month_end" ? "at month-end" : "once your yard is done"} - no need to do anything else
               for now.
             </p>
+            <p className="mt-4 text-[15px] leading-relaxed text-navy/70">
+              Your free landscaping consultation is included — message us whenever you want it.
+            </p>
             <PaymentTrustNote />
           </div>
         ) : (
@@ -563,6 +576,29 @@ export default function SignupPage() {
 
         {/* Populated and submitted programmatically once /api/signup or /api/pay returns the signed PayFast fields. */}
         <form ref={formRef} method="POST" className="hidden" />
+      </section>
+
+      {/* 10. Landscaping - below the signup. A WhatsApp link only: no form, no stored record, no prices. */}
+      <section className="border-t border-navy/10 py-24">
+        <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-skyblue">Want more than a tidy yard?</h2>
+        <ul className="mt-6 space-y-3">
+          {LANDSCAPING_ITEMS.map((item) => (
+            <li key={item} className="text-[17px] leading-relaxed text-navy">
+              {item}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-8 border border-navy/15 px-5 py-4 text-[15px] leading-relaxed text-navy">
+          Every subscriber gets a free consultation with our landscaping professional. No charge, no obligation.
+        </p>
+        <a
+          href={LANDSCAPING_QUOTE_LINK}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${SECONDARY_BUTTON_CLASS} mt-6`}
+        >
+          Request a quote
+        </a>
       </section>
 
     </main>

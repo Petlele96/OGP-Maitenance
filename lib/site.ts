@@ -37,6 +37,11 @@ export const ASK_QUESTION_LINK = `${WHATSAPP_LINK}?text=${encodeURIComponent(
   "Hi OGP Services, I have a question about yard maintenance."
 )}`;
 
+/** "Request a quote" button in the homepage landscaping section - opens WhatsApp to the business number. Nothing is stored. */
+export const LANDSCAPING_QUOTE_LINK = `${WHATSAPP_LINK}?text=${encodeURIComponent(
+  "Hi OGP, I would like a quote for landscaping. My house number is"
+)}`;
+
 /** "Report a problem" button on the signup page footer - opens WhatsApp to the business number. */
 export const REPORT_PROBLEM_LINK = `${WHATSAPP_LINK}?text=${encodeURIComponent(
   "Hi OGP Services, I'd like to report a problem with my yard service. House number: "
