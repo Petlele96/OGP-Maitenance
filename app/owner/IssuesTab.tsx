@@ -7,15 +7,19 @@ import {
   ISSUE_STATUS_LABELS,
   buildUrgentIssueMessage,
   findIssueType,
+  formatCoords,
   formatIssueDate,
+  gpsAccuracy,
   isIssueOverdue,
   OTHER_ISSUE_TYPE,
   issueDaysOpen,
   issueDescription,
   issueGroupLabel,
+  issueLocationDisplay,
   issueNeedsWording,
   issuePhaseLabel,
   johannesburgDateKey,
+  mapsUrl,
   monthLabel,
   type IssueStatus,
 } from "@/lib/issues";
@@ -43,6 +47,10 @@ interface Issue {
   aiFlag: boolean;
   aiFlagReason: string | null;
   aiFlagDismissed: boolean;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  gpsAccuracyM: number | null;
+  locationDetail: string | null;
 }
 
 type StatusFilter = "unresolved" | "all" | IssueStatus;
@@ -390,6 +398,8 @@ function IssueRow({
   const overdue = isIssueOverdue(i.status, days);
   const description = issueDescription({ reportDescription: i.reportDescription, aiDescription: i.aiDescription, typeLabel });
   const descriptionIsAi = !i.reportDescription?.trim() && Boolean(i.aiDescription?.trim());
+  const gps = i.gpsLat !== null && i.gpsLng !== null ? { lat: i.gpsLat, lng: i.gpsLng, accuracyM: i.gpsAccuracyM } : null;
+  const gpsInfo = gps ? gpsAccuracy(gps.accuracyM) : null;
   const showFlag = i.aiFlag && !i.aiFlagDismissed && !i.urgent && i.status !== "resolved";
 
   async function act(url: string, body: unknown) {
@@ -412,10 +422,11 @@ function IssueRow({
       buildUrgentIssueMessage({
         groupLabel: issueGroupLabel(i.category),
         typeLabel,
-        locationLabel: i.locationLabel,
+        locationLabel: issueLocationDisplay(i.locationLabel, i.locationDetail),
         phase: i.phase,
         description: i.reportDescription?.trim() || i.aiDescription?.trim() || i.note?.trim() || typeLabel,
         loggedAt: i.loggedAt,
+        gps,
       })
     );
     setCopied(ok);
@@ -478,9 +489,24 @@ function IssueRow({
           </div>
           <p className="mt-1.5 text-sm font-semibold text-brand-900">{description}</p>
           <p className="mt-0.5 text-xs text-brand-700">
-            {i.locationLabel} · {issuePhaseLabel(i.phase)}
+            {issueLocationDisplay(i.locationLabel, i.locationDetail)} · {issuePhaseLabel(i.phase)}
             {i.customerName ? ` · ${i.customerName}` : ""}
           </p>
+          {gps && gpsInfo && (
+            <p className="mt-0.5 text-xs">
+              <a
+                href={mapsUrl(gps.lat, gps.lng)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-brand-600 underline"
+              >
+                Open in Google Maps
+              </a>{" "}
+              <span className={gpsInfo.level === "rough" ? "font-semibold text-amber-700" : "text-brand-500"}>
+                · {formatCoords(gps.lat, gps.lng)} · {gpsInfo.label}
+              </span>
+            </p>
+          )}
         </div>
       </div>
 

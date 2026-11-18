@@ -326,3 +326,16 @@ create table if not exists issue_photos (
 alter table issue_photos enable row level security;
 drop policy if exists "deny_anonymous_access" on issue_photos;
 create policy "deny_anonymous_access" on issue_photos for all to anon, authenticated using (false);
+
+-- Where an issue is. gps_* is the phone's fix taken when the issue was logged: always optional, because logging never
+-- depends on it. gps_accuracy_m is the phone's own estimate in metres, kept so a poor fix is shown as a poor fix.
+-- location_detail is the worker's own words for the spot (for example front garden near the gate) on a customer's house.
+alter table maintenance_issues add column if not exists gps_lat double precision;
+alter table maintenance_issues add column if not exists gps_lng double precision;
+alter table maintenance_issues add column if not exists gps_accuracy_m real;
+alter table maintenance_issues add column if not exists location_detail text;
+alter table maintenance_issues drop constraint if exists maintenance_issues_gps_check;
+alter table maintenance_issues add constraint maintenance_issues_gps_check check (
+  (gps_lat is null) = (gps_lng is null)
+  and (gps_lat is null or (gps_lat between -90 and 90 and gps_lng between -180 and 180))
+);

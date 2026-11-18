@@ -4,7 +4,7 @@ import { PLANS, type PlanId, isSubscriberPlan } from "./plans";
 import { groupByPhase } from "./sort";
 import { nextDebitDate } from "./billing";
 import { paymentDueDate, dueStatus, daysBetween, type PayAfterWhen } from "./payments";
-import { findIssueType, monthBounds, type IssueStatus } from "./issues";
+import { findIssueType, monthBounds, type IssueGps, type IssueStatus } from "./issues";
 import {
   toDateKey,
   visitDaysForSlotInMonth,
@@ -2608,6 +2608,12 @@ export interface IssueItem {
   aiFlag: boolean;
   aiFlagReason: string | null;
   aiFlagDismissed: boolean;
+  /** The phone's fix when the issue was logged. Null when there was none. */
+  gpsLat: number | null;
+  gpsLng: number | null;
+  gpsAccuracyM: number | null;
+  /** The worker's own words for the spot, on a customer's house. */
+  locationDetail: string | null;
 }
 
 interface IssueDbRow {
@@ -2631,11 +2637,16 @@ interface IssueDbRow {
   ai_flag: boolean;
   ai_flag_reason: string | null;
   ai_flag_dismissed: boolean;
+  gps_lat: number | null;
+  gps_lng: number | null;
+  gps_accuracy_m: number | null;
+  location_detail: string | null;
 }
 
 const ISSUE_COLUMNS = `i.id, i.category, i.issue_type, i.note, i.urgent, i.signup_id, s.full_name as customer_name,
   i.location_label, i.phase, i.logged_by, i.logged_at, i.status, i.reported_at, i.resolved_at,
-  i.report_description, i.ai_description, i.ai_status, i.ai_flag, i.ai_flag_reason, i.ai_flag_dismissed`;
+  i.report_description, i.ai_description, i.ai_status, i.ai_flag, i.ai_flag_reason, i.ai_flag_dismissed,
+  i.gps_lat, i.gps_lng, i.gps_accuracy_m, i.location_detail`;
 
 function toIssueItem(r: IssueDbRow): IssueItem {
   return {
@@ -2659,6 +2670,10 @@ function toIssueItem(r: IssueDbRow): IssueItem {
     aiFlag: r.ai_flag,
     aiFlagReason: r.ai_flag_reason,
     aiFlagDismissed: r.ai_flag_dismissed,
+    gpsLat: r.gps_lat,
+    gpsLng: r.gps_lng,
+    gpsAccuracyM: r.gps_accuracy_m,
+    locationDetail: r.location_detail,
   };
 }
 
@@ -2684,6 +2699,8 @@ export interface CreateIssueInput {
   urgent: boolean;
   signupId: string | null;
   locationLabel: string;
+  locationDetail: string | null;
+  gps: IssueGps | null;
   phase: number | null;
   loggedBy: string;
   photo: Buffer;
@@ -2696,8 +2713,9 @@ export async function createIssue(input: CreateIssueInput): Promise<string> {
   if (!found) throw new Error("Unknown issue type");
   const { rows } = await getPool().query<{ id: string }>(
     `with i as (
-       insert into maintenance_issues (category, issue_type, note, urgent, signup_id, location_label, phase, logged_by)
-       values ($1, $2, $3, $4, $5, $6, $7, $8) returning id
+       insert into maintenance_issues (category, issue_type, note, urgent, signup_id, location_label, phase, logged_by,
+                                       gps_lat, gps_lng, gps_accuracy_m, location_detail)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $11, $12, $13, $14) returning id
      ), p as (
        insert into issue_photos (issue_id, photo, thumb) select id, $9, $10 from i
      )
@@ -2713,6 +2731,10 @@ export async function createIssue(input: CreateIssueInput): Promise<string> {
       input.loggedBy,
       input.photo,
       input.thumb,
+      input.gps?.lat ?? null,
+      input.gps?.lng ?? null,
+      input.gps?.accuracyM ?? null,
+      input.locationDetail,
     ]
   );
   return rows[0].id;
@@ -2765,11 +2787,12 @@ export async function getIssueForAssist(id: string): Promise<{ issue: IssueItem;
  * Stores the AI's suggestion. The flag only counts while the worker did not already mark it urgent, and it is
  * computed here against the current urgency - the AI itself never changes urgent or status.
  */
-export async function saveIssueAssist(id: string, r: { description: string; moreSerious: boolean; reason: string | null }): Promise<void> {
+export async function saveIssueAssist(id: string, r: { description: string | null; moreSerious: boolean; reason: string | null }): Promise<void> {
+  // With no description (the AI's wording was not usable) the run is recorded as failed, but its flag is still kept.
   await getPool().query(
     `update maintenance_issues
-        set ai_description = $2, ai_flag = ($3 and not urgent), ai_flag_reason = case when $3 and not urgent then $4 else null end,
-            ai_status = 'done', ai_ran_at = now(), ai_flag_dismissed = false
+        set ai_description = $2::text, ai_flag = ($3 and not urgent), ai_flag_reason = case when $3 and not urgent then $4 else null end,
+            ai_status = case when $2::text is null then 'failed' else 'done' end, ai_ran_at = now(), ai_flag_dismissed = false
       where id = $1`,
     [id, r.description, r.moreSerious, r.reason]
   );

@@ -6,6 +6,7 @@ import {
   ISSUE_THUMB_MAX_BYTES,
   createIssueSchema,
   looksLikeJpeg,
+  parseGpsFields,
 } from "@/lib/issues";
 
 export const runtime = "nodejs";
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
   }
 
   const fields: Record<string, string> = {};
-  for (const key of ["issueType", "urgent", "signupId", "locationText", "phase", "note", "workerId"]) {
+  for (const key of ["issueType", "urgent", "signupId", "locationText", "locationDetail", "phase", "note", "workerId"]) {
     const v = form.get(key);
     if (typeof v === "string" && v.trim() !== "") fields[key] = v.trim();
   }
@@ -48,6 +49,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Check the form" }, { status: 400 });
   }
   const input = parsed.data;
+  // GPS is a bonus: a missing, malformed or odd fix is simply left out and the issue still saves.
+  const gps = parseGpsFields({
+    gpsLat: String(form.get("gpsLat") ?? "").trim(),
+    gpsLng: String(form.get("gpsLng") ?? "").trim(),
+    gpsAccuracy: String(form.get("gpsAccuracy") ?? "").trim(),
+  });
 
   const worker = await getWorker(input.workerId);
   if (!worker) return NextResponse.json({ error: "That worker is not on the list any more. Pick another." }, { status: 400 });
@@ -70,6 +77,8 @@ export async function POST(req: NextRequest) {
     urgent: input.urgent === "yes",
     signupId,
     locationLabel,
+    locationDetail: signupId ? (input.locationDetail ?? null) : null,
+    gps,
     phase,
     loggedBy: worker.name,
     photo,

@@ -1,12 +1,16 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import { PDFDocument, PDFString, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import type { IssueReportRow } from "./db";
 import {
   ISSUE_GROUPS,
   findIssueType,
+  formatCoords,
   formatIssueDate,
+  gpsAccuracy,
   issueDaysOpen,
+  issueLocationDisplay,
   issuePhaseLabel,
   issueReportWording,
+  mapsUrl,
   monthBounds,
   monthLabel,
 } from "./issues";
@@ -31,9 +35,13 @@ const PAGE_H = 841.89;
 const MARGIN = 42;
 const CONTENT_W = PAGE_W - MARGIN * 2;
 const BOTTOM = 56;
-const CARD_H = 112;
+const CARD_H = 112; // the smallest a card gets
+const GPS_ROW_H = 14; // added when the issue has a GPS fix
+const LINE_H = 11; // added when the location needs a second line
 const PHOTO_W = 118;
 const PHOTO_H = 96;
+const TEXT_X = MARGIN + 8 + PHOTO_W + 14;
+const TEXT_W = CONTENT_W - (TEXT_X - MARGIN) - 10;
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -164,11 +172,23 @@ export async function buildIssueReportPdf({ month, issues, generatedAt, logo }: 
     y -= 30;
   }
 
+  /** The place as printed: the house or place plus the worker's own words, over at most two lines. */
+  function locationLines(issue: IssueReportRow): string[] {
+    const off = font.widthOfTextAtSize("Location ", 8) + 3;
+    return wrap(issueLocationDisplay(issue.locationLabel, issue.locationDetail), bold, 9, TEXT_W - off, 2);
+  }
+  function hasGps(issue: IssueReportRow): boolean {
+    return issue.gpsLat !== null && issue.gpsLng !== null;
+  }
+  function cardHeight(issue: IssueReportRow): number {
+    return CARD_H + (locationLines(issue).length > 1 ? LINE_H : 0) + (hasGps(issue) ? GPS_ROW_H : 0);
+  }
+
   for (const group of ISSUE_GROUPS) {
     const inGroup = issues.filter((i) => i.category === group.key);
     if (inGroup.length === 0) continue;
 
-    if (y - 30 - CARD_H < BOTTOM) newPage();
+    if (y - 30 - (CARD_H + GPS_ROW_H + LINE_H) < BOTTOM) newPage();
     page.drawRectangle({ x: MARGIN, y: y - 22, width: CONTENT_W, height: 22, color: PANEL });
     page.drawRectangle({ x: MARGIN, y: y - 22, width: 4, height: 22, color: ORANGE });
     text(page, group.label, MARGIN + 14, y - 15, 12, bold, NAVY);
@@ -177,15 +197,16 @@ export async function buildIssueReportPdf({ month, issues, generatedAt, logo }: 
     y -= 22 + 10;
 
     for (const issue of inGroup) {
-      if (y - CARD_H < BOTTOM) newPage();
-      await drawCard(issue, y);
-      y -= CARD_H + 10;
+      const h = cardHeight(issue);
+      if (y - h < BOTTOM) newPage();
+      await drawCard(issue, y, h);
+      y -= h + 10;
     }
     y -= 6;
   }
 
-  async function drawCard(issue: IssueReportRow, top: number) {
-    page.drawRectangle({ x: MARGIN, y: top - CARD_H, width: CONTENT_W, height: CARD_H, borderColor: LINE, borderWidth: 1 });
+  async function drawCard(issue: IssueReportRow, top: number, height: number) {
+    page.drawRectangle({ x: MARGIN, y: top - height, width: CONTENT_W, height, borderColor: LINE, borderWidth: 1 });
 
     // photo, fitted inside its box
     const px = MARGIN + 8;
@@ -206,8 +227,8 @@ export async function buildIssueReportPdf({ month, issues, generatedAt, logo }: 
     }
     if (!drewPhoto) text(page, "Photo unavailable", px + 22, py + PHOTO_H / 2 - 3, 8, font, GREY);
 
-    const tx = MARGIN + 8 + PHOTO_W + 14;
-    const tw = CONTENT_W - (tx - MARGIN) - 10;
+    const tx = TEXT_X;
+    const tw = TEXT_W;
     const def = findIssueType(issue.issueType);
     const typeLabel = def?.type.label ?? issue.issueType;
 
@@ -231,17 +252,47 @@ export async function buildIssueReportPdf({ month, issues, generatedAt, logo }: 
         : issue.status === "reported" && issue.reportedAt
           ? `Reported on ${formatIssueDate(issue.reportedAt)}, still open`
           : "Still open";
-    const col2 = tx + tw * 0.55;
     const detail = (name: string, value: string, x: number, yy: number, maxW: number) => {
       text(page, name, x, yy, 8, font, GREY);
       const off = font.widthOfTextAtSize(`${name} `, 8) + 3;
       text(page, fit(value, bold, 9, maxW - off), x + off, yy, 9, bold, INK);
     };
-    detail("Location", issue.locationLabel, tx, top - 74, col2 - tx - 8);
-    detail("Logged", formatIssueDate(issue.loggedAt), col2, top - 74, tx + tw - col2);
-    detail("Phase", issuePhaseLabel(issue.phase), tx, top - 88, col2 - tx - 8);
-    detail("Days open", String(daysOpen), col2, top - 88, tx + tw - col2);
-    detail("Status", status, tx, top - 102, tw);
+
+    // Location: the house or place plus the worker's own words. This is what a reader falls back on with no GPS.
+    const locLines = locationLines(issue);
+    const locOff = font.widthOfTextAtSize("Location ", 8) + 3;
+    text(page, "Location", tx, top - 74, 8, font, GREY);
+    locLines.forEach((line, n) => text(page, line, tx + locOff, top - 74 - n * LINE_H, 9, bold, INK));
+    const shift = (locLines.length - 1) * LINE_H;
+
+    const colW = tw / 3;
+    detail("Phase", issuePhaseLabel(issue.phase), tx, top - 88 - shift, colW - 6);
+    detail("Logged", formatIssueDate(issue.loggedAt), tx + colW, top - 88 - shift, colW - 6);
+    detail("Days open", String(daysOpen), tx + colW * 2, top - 88 - shift, colW);
+    detail("Status", status, tx, top - 102 - shift, tw);
+
+    // GPS: the coordinates as text (they survive printing) and a link that opens the spot in Google Maps.
+    if (issue.gpsLat !== null && issue.gpsLng !== null) {
+      const yy = top - 116 - shift;
+      const linkText = "Open in Google Maps";
+      const linkW = bold.widthOfTextAtSize(linkText, 8.5);
+      const off = font.widthOfTextAtSize("GPS ", 8) + 3;
+      const coords = `${formatCoords(issue.gpsLat, issue.gpsLng)} (${gpsAccuracy(issue.gpsAccuracyM).label})`;
+      text(page, "GPS", tx, yy, 8, font, GREY);
+      const shown = fit(coords, bold, 9, tw - off - linkW - 12);
+      text(page, shown, tx + off, yy, 9, bold, INK);
+      const lx = tx + off + bold.widthOfTextAtSize(shown, 9) + 10;
+      text(page, linkText, lx, yy, 8.5, bold, SKY);
+      page.drawRectangle({ x: lx, y: yy - 1.5, width: linkW, height: 0.6, color: SKY });
+      const link = pdf.context.obj({
+        Type: "Annot",
+        Subtype: "Link",
+        Rect: [lx, yy - 3, lx + linkW, yy + 10],
+        Border: [0, 0, 0],
+        A: { Type: "Action", S: "URI", URI: PDFString.of(mapsUrl(issue.gpsLat, issue.gpsLng)) },
+      });
+      page.node.addAnnot(pdf.context.register(link));
+    }
   }
 
   // ---- footer on every page

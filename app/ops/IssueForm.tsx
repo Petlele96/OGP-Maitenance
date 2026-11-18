@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ISSUE_GROUPS, ISSUE_NOTE_MAX, OTHER_ISSUE_TYPE } from "@/lib/issues";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ISSUE_DETAIL_MAX, ISSUE_GROUPS, ISSUE_NOTE_MAX, OTHER_ISSUE_TYPE, formatMetres, gpsAccuracy } from "@/lib/issues";
 import { PHASES } from "@/lib/sort";
 
 interface Worker {
@@ -44,6 +44,100 @@ async function toJpeg(file: File, maxSide: number, quality: number): Promise<Blo
   }
 }
 
+interface GpsFix {
+  lat: number;
+  lng: number;
+  accuracyM: number;
+  at: number;
+}
+type GpsStatus = "finding" | "ready" | "denied" | "unavailable";
+
+const GPS_WINDOW_MS = 20_000; // keep improving the fix for this long at most
+const GPS_GOOD_ENOUGH_M = 15; // stop early once the phone is this sure
+const GPS_FRESH_MS = 60_000; // a fix older than this is retaken when a photo is taken
+const GPS_MAX_AGE_MS = 10 * 60_000; // a fix older than this is never saved: it may not be where the issue is
+
+/**
+ * The phone's location, taken in the background. The browser asks for permission itself the first time and remembers
+ * the answer, so the worker is not asked again. Nothing here ever blocks the form: no permission, no signal or a poor
+ * fix just means the issue is saved without GPS (or with a fix that is shown as rough).
+ */
+function useGps() {
+  const [status, setStatus] = useState<GpsStatus>("finding");
+  const [fix, setFix] = useState<GpsFix | null>(null);
+  const best = useRef<GpsFix | null>(null);
+  const watchId = useRef<number | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const stop = useCallback(() => {
+    if (watchId.current !== null) {
+      try {
+        navigator.geolocation.clearWatch(watchId.current);
+      } catch {
+        /* ignore */
+      }
+      watchId.current = null;
+    }
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, []);
+
+  const start = useCallback(() => {
+    stop();
+    best.current = null;
+    setFix(null);
+    if (typeof navigator === "undefined" || !("geolocation" in navigator)) return setStatus("unavailable");
+    setStatus("finding");
+    try {
+      watchId.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          const next: GpsFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy, at: Date.now() };
+          if (!best.current || next.accuracyM <= best.current.accuracyM) {
+            best.current = next;
+            setFix(next);
+          }
+          setStatus("ready");
+          if (next.accuracyM <= GPS_GOOD_ENOUGH_M) stop();
+        },
+        (err) => {
+          if (err.code === err.PERMISSION_DENIED) {
+            setStatus("denied");
+            stop();
+          }
+          // a timeout or "position unavailable" keeps waiting until the window below ends
+        },
+        { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 }
+      );
+      timer.current = setTimeout(() => {
+        stop();
+        setStatus(best.current ? "ready" : "unavailable");
+      }, GPS_WINDOW_MS);
+    } catch {
+      setStatus("unavailable");
+    }
+  }, [stop]);
+
+  useEffect(() => {
+    start();
+    return stop;
+  }, [start, stop]);
+
+  /** The fix to save, or null when there is none or it is too old to trust. */
+  const current = useCallback((): GpsFix | null => {
+    const b = best.current;
+    return b && Date.now() - b.at <= GPS_MAX_AGE_MS ? b : null;
+  }, []);
+  /** Retake the fix if it is missing or stale (called when a photo is taken: the worker is at the issue then). */
+  const refresh = useCallback(() => {
+    const b = best.current;
+    if (!b || Date.now() - b.at > GPS_FRESH_MS) start();
+  }, [start]);
+
+  return { status, fix, start, current, refresh };
+}
+
 /**
  * "Log an issue": a full-screen form opened from the ops header, available from any tab. Built to be filled in
  * standing in a yard - photo first, big tap targets, nothing to type except an optional note. Saving never waits
@@ -58,6 +152,7 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
 
   const [issueType, setIssueType] = useState("");
   const [urgent, setUrgent] = useState<boolean | null>(null);
@@ -65,6 +160,7 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
   const [query, setQuery] = useState("");
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [locationText, setLocationText] = useState("");
+  const [locationDetail, setLocationDetail] = useState("");
   const [phase, setPhase] = useState("");
   const [note, setNote] = useState("");
   const [workerId, setWorkerId] = useState("");
@@ -73,7 +169,8 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<{ urgent: boolean } | null>(null);
+  const [saved, setSaved] = useState<{ urgent: boolean; gps: GpsFix | null } | null>(null);
+  const gps = useGps();
 
   useEffect(() => {
     (async () => {
@@ -104,6 +201,7 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
     if (!file) return;
     setPhotoBusy(true);
     setPhotoError(null);
+    gps.refresh();
     try {
       const [full, thumb] = await Promise.all([toJpeg(file, 1600, 0.8), toJpeg(file, 420, 0.65)]);
       setPhoto({ full, thumb, previewUrl: URL.createObjectURL(thumb) });
@@ -159,8 +257,15 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
     body.set("urgent", urgent ? "yes" : "no");
     body.set("workerId", workerId);
     if (note.trim()) body.set("note", note.trim());
+    const fix = gps.current();
+    if (fix) {
+      body.set("gpsLat", String(fix.lat));
+      body.set("gpsLng", String(fix.lng));
+      body.set("gpsAccuracy", String(fix.accuracyM));
+    }
     if (where === "customer" && customer) {
       body.set("signupId", customer.id);
+      if (locationDetail.trim()) body.set("locationDetail", locationDetail.trim());
       if (customer.phase === null && phase) body.set("phase", phase);
     } else {
       body.set("locationText", locationText.trim());
@@ -191,7 +296,7 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
       body: JSON.stringify({ id: json.id }),
       keepalive: true,
     }).catch(() => {});
-    setSaved({ urgent: urgent === true });
+    setSaved({ urgent: urgent === true, gps: fix });
   }
 
   function logAnother() {
@@ -201,10 +306,13 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
     setQuery("");
     setCustomer(null);
     setLocationText("");
+    setLocationDetail("");
     setPhase("");
     setNote("");
     setError(null);
     setSaved(null);
+    gps.start(); // a new issue is probably somewhere else: take a new fix
+
   }
 
   if (saved) {
@@ -218,6 +326,11 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
               {saved.urgent
                 ? "Marked urgent. It is at the top of the owner's Issues list. Nothing is sent automatically, so let the owner know."
                 : "It is on the owner's Issues list. Nothing has been sent to anyone."}
+            </p>
+            <p className="mt-2 text-xs text-brand-600">
+              {saved.gps
+                ? `Location saved (${gpsAccuracy(saved.gps.accuracyM).label}).`
+                : "No GPS location was saved - the owner sees the place you described."}
             </p>
           </div>
           <button onClick={logAnother} className="rounded-xl bg-brand-600 px-4 py-3 text-base font-semibold text-white">
@@ -260,6 +373,18 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
         {/* 1. Photo */}
         <section className="flex flex-col gap-2">
           <p className={label}>Photo (required)</p>
+          {/* Two inputs: one opens the camera, one opens the phone's photos and files. */}
+          <input
+            ref={cameraRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              onPhotoPicked(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
           <input
             ref={fileRef}
             type="file"
@@ -270,23 +395,33 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
               e.target.value = "";
             }}
           />
-          {photo ? (
+          {photo && (
             <div className="flex items-center gap-3 rounded-xl bg-white p-2 ring-1 ring-brand-100">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={photo.previewUrl} alt="The issue" className="h-20 w-28 rounded-lg object-cover" />
-              <button onClick={() => fileRef.current?.click()} className="text-sm font-semibold text-brand-600 underline">
-                Retake photo
-              </button>
+              <p className="text-sm font-semibold text-brand-700">Photo added</p>
             </div>
-          ) : (
+          )}
+          <div className="flex gap-2">
             <button
+              type="button"
+              onClick={() => cameraRef.current?.click()}
+              disabled={photoBusy}
+              className={`flex-1 rounded-xl px-3 py-4 text-sm font-semibold disabled:opacity-60 ${
+                photo ? "bg-white text-brand-700 ring-1 ring-brand-200" : "bg-brand-600 text-white"
+              }`}
+            >
+              {photoBusy ? "Preparing..." : photo ? "Retake with camera" : "Take a photo"}
+            </button>
+            <button
+              type="button"
               onClick={() => fileRef.current?.click()}
               disabled={photoBusy}
-              className="rounded-xl border-2 border-dashed border-brand-400 bg-white px-4 py-8 text-base font-semibold text-brand-700 disabled:opacity-60"
+              className="flex-1 rounded-xl bg-white px-3 py-4 text-sm font-semibold text-brand-700 ring-1 ring-brand-200 disabled:opacity-60"
             >
-              {photoBusy ? "Preparing photo..." : "Take or choose a photo"}
+              {photo ? "Upload a different one" : "Upload from device"}
             </button>
-          )}
+          </div>
           {photoError && <p className="text-sm text-red-600">{photoError}</p>}
         </section>
 
@@ -336,24 +471,34 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
 
           {where === "customer" ? (
             customer ? (
-              <div className="flex items-center justify-between rounded-xl bg-white p-3 ring-1 ring-brand-100">
-                <div>
-                  <p className="text-sm font-semibold text-brand-900">
-                    House {customer.houseNumber} · {customer.fullName}
-                  </p>
-                  <p className="text-xs text-brand-600">{customer.phase !== null ? `Phase ${customer.phase}` : "No phase on file"}</p>
+              <>
+                <div className="flex items-center justify-between rounded-xl bg-white p-3 ring-1 ring-brand-100">
+                  <div>
+                    <p className="text-sm font-semibold text-brand-900">
+                      House {customer.houseNumber} · {customer.fullName}
+                    </p>
+                    <p className="text-xs text-brand-600">{customer.phase !== null ? `Phase ${customer.phase}` : "No phase on file"}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setCustomer(null);
+                      setQuery("");
+                      setPhase("");
+                      setLocationDetail("");
+                    }}
+                    className="text-xs font-semibold text-brand-500 underline"
+                  >
+                    Change
+                  </button>
                 </div>
-                <button
-                  onClick={() => {
-                    setCustomer(null);
-                    setQuery("");
-                    setPhase("");
-                  }}
-                  className="text-xs font-semibold text-brand-500 underline"
-                >
-                  Change
-                </button>
-              </div>
+                <input
+                  value={locationDetail}
+                  onChange={(e) => setLocationDetail(e.target.value)}
+                  maxLength={ISSUE_DETAIL_MAX}
+                  placeholder="Where on the property? (optional) e.g. front garden, near the gate"
+                  className={field}
+                />
+              </>
             ) : (
               <>
                 <input
@@ -393,7 +538,7 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
               value={locationText}
               onChange={(e) => setLocationText(e.target.value)}
               maxLength={120}
-              placeholder="Street or landmark, e.g. corner of Birch and Oak"
+              placeholder="Say where it is, e.g. corner of the sports ground, east side"
               className={field}
             />
           )}
@@ -410,6 +555,8 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
               ))}
             </select>
           )}
+
+          <GpsLine status={gps.status} fix={gps.fix} onRetry={gps.start} />
         </section>
 
         {/* 5. Note */}
@@ -466,5 +613,41 @@ export default function IssueForm({ onClose, onUnauthorized }: { onClose: () => 
         </button>
       </div>
     </div>
+  );
+}
+
+/** One line under "Where is it?" saying what the phone's location is doing - and how good it is, so a poor fix looks poor. */
+function GpsLine({ status, fix, onRetry }: { status: GpsStatus; fix: GpsFix | null; onRetry: () => void }) {
+  const base = "rounded-lg px-3 py-2 text-xs";
+  if (status === "finding" && !fix) return <p className={`${base} bg-white text-brand-600 ring-1 ring-brand-100`}>Finding your location...</p>;
+  if (fix) {
+    const a = gpsAccuracy(fix.accuracyM);
+    if (a.level === "rough") {
+      return (
+        <p className={`${base} bg-amber-50 font-medium text-amber-900 ring-1 ring-amber-300`}>
+          Rough location: it could be up to {formatMetres(fix.accuracyM)} out. Say where it is in your own words as well.
+        </p>
+      );
+    }
+    return (
+      <p className={`${base} ${a.level === "good" ? "bg-green-50 text-green-900 ring-green-200" : "bg-white text-brand-800 ring-brand-200"} ring-1`}>
+        Location captured, {a.label}.{status === "finding" ? " Still improving..." : ""}
+      </p>
+    );
+  }
+  if (status === "denied") {
+    return (
+      <p className={`${base} bg-white text-brand-700 ring-1 ring-brand-100`}>
+        Location is blocked for this site, so none will be saved. Say where it is above - you can still save.
+      </p>
+    );
+  }
+  return (
+    <p className={`${base} flex items-center justify-between gap-2 bg-white text-brand-700 ring-1 ring-brand-100`}>
+      <span>No location from this phone right now. Say where it is above - you can still save.</span>
+      <button type="button" onClick={onRetry} className="shrink-0 font-semibold text-brand-600 underline">
+        Try again
+      </button>
+    </p>
   );
 }

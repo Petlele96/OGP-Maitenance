@@ -104,6 +104,64 @@ export const ISSUE_DESCRIPTION_MAX = 200;
 export const ISSUE_PHOTO_MAX_BYTES = 3_500_000;
 export const ISSUE_THUMB_MAX_BYTES = 300_000;
 
+/** "Where on the property", the optional extra line for an issue at a customer's house. */
+export const ISSUE_DETAIL_MAX = 120;
+
+// ---------------------------------------------------------------------------------------------------------------
+// GPS: taken from the phone when the issue is logged. Always optional - logging never depends on it.
+
+export interface IssueGps {
+  lat: number;
+  lng: number;
+  /** The phone's own estimate of how far off the fix could be, in metres. Null when it was not reported. */
+  accuracyM: number | null;
+}
+
+/** At or under this the fix is good, up to ROUGH it is fair, above it the fix is shown as rough. */
+export const GPS_GOOD_M = 30;
+export const GPS_ROUGH_M = 100;
+
+export function formatMetres(m: number): string {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+/** How to describe a fix, so a bad one is visibly a bad one. */
+export function gpsAccuracy(accuracyM: number | null): { label: string; level: "good" | "fair" | "rough" | "unknown" } {
+  if (accuracyM === null) return { label: "accuracy not recorded", level: "unknown" };
+  if (accuracyM <= GPS_GOOD_M) return { label: `accurate to about ${formatMetres(accuracyM)}`, level: "good" };
+  if (accuracyM <= GPS_ROUGH_M) return { label: `accurate to about ${formatMetres(accuracyM)}`, level: "fair" };
+  return { label: `rough fix, about ${formatMetres(accuracyM)}`, level: "rough" };
+}
+
+export function formatCoords(lat: number, lng: number): string {
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+}
+
+/** A link that opens the spot in Google Maps (the app on a phone). */
+export function mapsUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps/search/?api=1&query=${lat.toFixed(6)},${lng.toFixed(6)}`;
+}
+
+/** The place as the owner and the report show it: the house or place, plus the worker's own words about the spot. */
+export function issueLocationDisplay(locationLabel: string, locationDetail: string | null): string {
+  return locationDetail?.trim() ? `${locationLabel} - ${locationDetail.trim()}` : locationLabel;
+}
+
+/**
+ * Reads the GPS fields of a submitted form. Anything missing or not believable gives null - a bad fix must never
+ * stop an issue from saving, so this never throws and the caller just saves without GPS.
+ */
+export function parseGpsFields(raw: { gpsLat?: string; gpsLng?: string; gpsAccuracy?: string }): IssueGps | null {
+  if (!raw.gpsLat || !raw.gpsLng) return null;
+  const lat = Number(raw.gpsLat);
+  const lng = Number(raw.gpsLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  if (lat === 0 && lng === 0) return null; // the "null island" value some phones give when they have nothing
+  const acc = raw.gpsAccuracy ? Number(raw.gpsAccuracy) : NaN;
+  return { lat, lng, accuracyM: Number.isFinite(acc) && acc >= 0 && acc < 1_000_000 ? Math.round(acc * 10) / 10 : null };
+}
+
 /** Calendar date (Johannesburg) of an instant, as YYYY-MM-DD. */
 export function johannesburgDateKey(iso: string | Date): string {
   return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Africa/Johannesburg" });
@@ -129,6 +187,33 @@ export function issueDescription(i: {
   typeLabel: string;
 }): string {
   return i.reportDescription?.trim() || i.aiDescription?.trim() || i.typeLabel;
+}
+
+/**
+ * The AI's report line must only DESCRIBE what is visible. This is the safety net behind the instructions it is given:
+ * it catches wording that names a cause, a repair, how bad it is or a guess, and returns the offending word (else
+ * null). An AI line goes into the client report without anyone reading it first, so this runs on every one.
+ */
+const NOT_DESCRIBING = new RegExp(
+  "\\b(" +
+    [
+      // a cause or a diagnosis
+      "burst", "ruptur\\w*", "caused", "causing", "due to", "because", "as a result", "result of", "faulty", "malfunction\\w*",
+      // a repair or an instruction
+      "needs?", "needed", "should", "must", "requires?", "required", "repair\\w*", "replac\\w*", "to fix", "recommend\\w*",
+      "urgent\\w*", "immediate\\w*", "asap",
+      // how bad it is
+      "severe\\w*", "serious\\w*", "critical\\w*", "major", "minor", "extensive\\w*", "significant\\w*", "substantial\\w*",
+      "dangerous\\w*", "hazard\\w*", "unsafe", "risk\\w*", "threat\\w*", "emergency", "catastroph\\w*", "massive", "badly",
+      // guessing
+      "likely", "probably", "possibly", "presumably", "suggest\\w*", "indicat\\w*",
+    ].join("|") +
+    ")\\b",
+  "i"
+);
+
+export function describeOnlyViolation(text: string): string | null {
+  return NOT_DESCRIBING.exec(text)?.[1].toLowerCase() ?? null;
 }
 
 /** True when neither the AI nor the owner has written a line for the report - the report is then using a fallback. */
@@ -178,12 +263,14 @@ export function buildUrgentIssueMessage(i: {
   phase: number | null;
   description: string;
   loggedAt: string;
+  gps?: IssueGps | null;
 }): string {
   const where = i.phase === null ? i.locationLabel : `${i.locationLabel}, Phase ${i.phase}`;
   return [
     "Urgent maintenance issue - OGP Services",
     `Issue: ${i.groupLabel} - ${i.typeLabel}`,
     `Location: ${where}`,
+    ...(i.gps ? [`Map (${gpsAccuracy(i.gps.accuracyM).label}): ${mapsUrl(i.gps.lat, i.gps.lng)}`] : []),
     `Seen on: ${formatIssueDate(i.loggedAt)}`,
     `Details: ${i.description}`,
     "A photo is available - please let us know if you would like it sent.",
@@ -220,6 +307,8 @@ export const createIssueSchema = z
     urgent: z.enum(["yes", "no"], { errorMap: () => ({ message: "Say whether someone should come today" }) }),
     signupId: z.string().uuid().optional(),
     locationText: z.string().trim().max(ISSUE_LOCATION_MAX, "Keep the place short").optional(),
+    // Only used for a customer's house: where on the property. A free-text place already says where.
+    locationDetail: z.string().trim().max(ISSUE_DETAIL_MAX, "Keep the spot short").optional(),
     phase: z
       .string()
       .regex(/^\d$/, "Choose a phase")
